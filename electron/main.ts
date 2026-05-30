@@ -10,6 +10,7 @@ import {
   listOptimizations,
   revertOptimization
 } from './services/windowsOptimizationService';
+import { isCleanupId, listCleanupTasks, runCleanupTasks } from './services/windowsCleanupService';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -118,6 +119,25 @@ ipcMain.handle('optimization:revert', async (_event, id: unknown) => {
   }
 
   return revertOptimization(id);
+});
+
+ipcMain.handle('cleanup:list', async () => {
+  return listCleanupTasks();
+});
+
+ipcMain.handle('cleanup:run', async (_event, ids: unknown) => {
+  if (!Array.isArray(ids)) {
+    return {
+      success: false,
+      message: 'Seleção de limpeza inválida.',
+      cleanedBytes: null,
+      requiresExplorerRestart: false,
+      results: [],
+      lastCleanupAt: null
+    };
+  }
+
+  return runCleanupTasks(ids.filter(isCleanupId));
 });
 
 ipcMain.on('window:minimize', (event) => {

@@ -4,6 +4,7 @@ import type { PageKey } from './constants/navigation';
 import { Apps } from './pages/Apps';
 import { Auth } from './pages/Auth';
 import { Cleanup } from './pages/Cleanup';
+import { Csgo } from './pages/Csgo';
 import { Dashboard } from './pages/Dashboard';
 import { Optimizations } from './pages/Optimizations';
 import { Restore } from './pages/Restore';
@@ -13,6 +14,7 @@ const pages: Record<PageKey, JSX.Element> = {
   dashboard: <Dashboard />,
   optimizations: <Optimizations />,
   cleanup: <Cleanup />,
+  csgo: <Csgo />,
   restore: <Restore />,
   apps: <Apps />,
   settings: <Settings />,

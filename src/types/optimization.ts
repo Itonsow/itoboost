@@ -3,10 +3,12 @@ export type OptimizationCategory =
   | 'Desempenho'
   | 'Gaming'
   | 'Privacidade'
+  | 'Rede'
   | 'Aparência'
   | 'Geral'
   | 'Sistema'
   | 'Segurança'
+  | 'GPU'
   | 'Avançado';
 
 export type OptimizationRiskLevel = 'low' | 'medium' | 'high';
@@ -27,7 +29,25 @@ export type OptimizationId =
   | 'disable-hibernation'
   | 'disable-location-tracking'
   | 'disable-lock-screen-tips'
-  | 'disable-mouse-acceleration';
+  | 'disable-mouse-acceleration'
+  | 'disable-wifi-sense'
+  | 'enable-dark-mode'
+  | 'enable-end-task-context-menu'
+  | 'enable-game-mode'
+  | 'enable-hags'
+  | 'enable-hpet'
+  | 'enable-windowed-game-optimizations'
+  | 'remove-menu-delay'
+  | 'optimize-network-settings'
+  | 'optimize-nvidia-settings'
+  | 'remove-gaming-apps'
+  | 'remove-onedrive'
+  | 'classic-context-menu'
+  | 'run-disk-cleanup'
+  | 'set-powershell7-default'
+  | 'set-services-manual'
+  | 'set-time-utc'
+  | 'configure-win32-priority-separation';
 
 export interface OptimizationDefinition {
   id: OptimizationId;

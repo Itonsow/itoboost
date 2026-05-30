@@ -40,10 +40,40 @@ export async function writeRegistryValue(
   }
 }
 
+export async function writeRegistryDefaultValue(path: string, value: string): Promise<void> {
+  const result = await runExecutable('reg.exe', ['add', path, '/ve', '/d', value, '/f'], 10000);
+
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || result.stdout || 'Falha ao gravar valor padrão no registro.');
+  }
+}
+
 export async function deleteRegistryValue(path: string, name: string): Promise<void> {
   const result = await runExecutable('reg.exe', ['delete', path, '/v', name, '/f'], 10000);
+  const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
 
-  if (result.exitCode !== 0 && !result.stderr.toLowerCase().includes('unable to find')) {
+  if (
+    result.exitCode !== 0 &&
+    !output.includes('unable to find') &&
+    !output.includes('not found') &&
+    !output.includes('localizar') &&
+    !output.includes('encontr')
+  ) {
     throw new Error(result.stderr || result.stdout || 'Falha ao remover valor do registro.');
+  }
+}
+
+export async function deleteRegistryKey(path: string): Promise<void> {
+  const result = await runExecutable('reg.exe', ['delete', path, '/f'], 10000);
+  const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
+
+  if (
+    result.exitCode !== 0 &&
+    !output.includes('unable to find') &&
+    !output.includes('not found') &&
+    !output.includes('localizar') &&
+    !output.includes('encontr')
+  ) {
+    throw new Error(result.stderr || result.stdout || 'Falha ao remover chave do registro.');
   }
 }

@@ -12,7 +12,13 @@ import type {
 import { isRunningAsAdmin } from './adminService';
 import { logOptimizationAction } from './logService';
 import { runExecutable, runPowerShellScript } from './powershellService';
-import { deleteRegistryValue, readRegistryValue, writeRegistryValue } from './registryService';
+import {
+  deleteRegistryKey,
+  deleteRegistryValue,
+  readRegistryValue,
+  writeRegistryDefaultValue,
+  writeRegistryValue
+} from './registryService';
 
 const GUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
@@ -32,10 +38,41 @@ const LOCATION_CONSENT_KEY =
   'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\location';
 const CONTENT_DELIVERY_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager';
 const MOUSE_KEY = 'HKCU\\Control Panel\\Mouse';
+const WIFI_SENSE_CONFIG_KEY = 'HKLM\\SOFTWARE\\Microsoft\\WcmSvc\\wifinetworkmanager\\config';
+const WIFI_HOTSPOT_POLICY_KEY = 'HKLM\\SOFTWARE\\Microsoft\\PolicyManager\\default\\WiFi\\AllowWiFiHotSpotReporting';
+const WIFI_AUTOCONNECT_POLICY_KEY =
+  'HKLM\\SOFTWARE\\Microsoft\\PolicyManager\\default\\WiFi\\AllowAutoConnectToWiFiSenseHotspots';
+const DARK_MODE_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize';
+const GRAPHICS_DRIVERS_KEY = 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers';
+const DIRECTX_GRAPHICS_SETTINGS_KEY = 'HKCU\\Software\\Microsoft\\DirectX\\GraphicsSettings';
+const DESKTOP_KEY = 'HKCU\\Control Panel\\Desktop';
+const MULTIMEDIA_SYSTEM_PROFILE_KEY =
+  'HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile';
+const ITOBOOST_OPTIMIZATION_MARKERS_KEY = 'HKCU\\Software\\ItoBoost\\Optimizations';
+const CLASSIC_CONTEXT_MENU_KEY =
+  'HKCU\\Software\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\\InprocServer32';
+const CLASSIC_CONTEXT_MENU_ROOT_KEY =
+  'HKCU\\Software\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}';
+const TIME_ZONE_INFORMATION_KEY = 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\TimeZoneInformation';
+const PRIORITY_CONTROL_KEY = 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\PriorityControl';
+
+const OPTIONAL_MANUAL_SERVICES = [
+  'XblAuthManager',
+  'XblGameSave',
+  'XboxGipSvc',
+  'XboxNetApiSvc',
+  'MapsBroker',
+  'Fax',
+  'RetailDemo',
+  'WMPNetworkSvc'
+];
 
 interface OptimizationState {
   previousPowerPlanGuid?: string;
   ultimatePowerPlanGuid?: string;
+  previousWindowsTerminalDefaultProfile?: string;
+  previousServiceStartModes?: Record<string, string>;
+  previousWin32PrioritySeparation?: string | null;
 }
 
 const allowedIds = new Set<OptimizationId>(optimizationDefinitions.map((item) => item.id));
@@ -126,6 +163,146 @@ function registryStringIsActive(value: string | null, activeValue: string): Opti
 async function getWindowsBuild(): Promise<number | null> {
   const currentVersion = await readRegistryValue('HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion', 'CurrentBuild');
   return currentVersion.value ? Number.parseInt(currentVersion.value, 10) : null;
+}
+
+async function hasNvidiaGpu(): Promise<boolean> {
+  const result = await runPowerShellScript(
+    "(Get-CimInstance Win32_VideoController | Where-Object { $_.Name -match 'NVIDIA' } | Select-Object -First 1 -ExpandProperty Name)",
+    { timeoutMs: 10000 }
+  );
+
+  return result.exitCode === 0 && result.stdout.trim().length > 0;
+}
+
+async function oneDriveSetupPath(): Promise<string | null> {
+  const script = `
+$paths = @(
+  "$env:SystemRoot\\SysWOW64\\OneDriveSetup.exe",
+  "$env:SystemRoot\\System32\\OneDriveSetup.exe",
+  "$env:LOCALAPPDATA\\Microsoft\\OneDrive\\OneDriveSetup.exe"
+)
+$paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+`;
+  const result = await runPowerShellScript(script, { timeoutMs: 10000 });
+  const setupPath = result.stdout.trim();
+  return result.exitCode === 0 && setupPath ? setupPath : null;
+}
+
+async function nvidiaSmiPath(): Promise<string | null> {
+  const script = `
+$commands = @(
+  "$env:ProgramFiles\\NVIDIA Corporation\\NVSMI\\nvidia-smi.exe",
+  "$env:SystemRoot\\System32\\nvidia-smi.exe"
+)
+$found = $commands | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $found) {
+  $cmd = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
+  if ($cmd) { $found = $cmd.Source }
+}
+$found
+`;
+  const result = await runPowerShellScript(script, { timeoutMs: 10000 });
+  const smiPath = result.stdout.trim();
+  return result.exitCode === 0 && smiPath ? smiPath : null;
+}
+
+async function getWindowsTerminalSettingsPath(): Promise<string | null> {
+  const script = `
+$paths = @(
+  "$env:LOCALAPPDATA\\Packages\\Microsoft.WindowsTerminal_8wekyb3d8bbwe\\LocalState\\settings.json",
+  "$env:LOCALAPPDATA\\Packages\\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\\LocalState\\settings.json",
+  "$env:LOCALAPPDATA\\Microsoft\\Windows Terminal\\settings.json"
+)
+$paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+`;
+  const result = await runPowerShellScript(script, { timeoutMs: 10000 });
+  const settingsPath = result.stdout.trim();
+  return result.exitCode === 0 && settingsPath ? settingsPath : null;
+}
+
+async function hasPowerShell7(): Promise<boolean> {
+  const result = await runPowerShellScript('if (Get-Command pwsh.exe -ErrorAction SilentlyContinue) { "present" }', {
+    timeoutMs: 10000
+  });
+  return result.exitCode === 0 && result.stdout.includes('present');
+}
+
+async function isPowerShell7Default(): Promise<boolean> {
+  const script = `
+$paths = @(
+  "$env:LOCALAPPDATA\\Packages\\Microsoft.WindowsTerminal_8wekyb3d8bbwe\\LocalState\\settings.json",
+  "$env:LOCALAPPDATA\\Packages\\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\\LocalState\\settings.json",
+  "$env:LOCALAPPDATA\\Microsoft\\Windows Terminal\\settings.json"
+)
+$path = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $path) { 'missing'; exit 0 }
+$settings = Get-Content $path -Raw | ConvertFrom-Json
+$profiles = @($settings.profiles.list)
+$default = $profiles | Where-Object { $_.guid -eq $settings.defaultProfile } | Select-Object -First 1
+if ($default -and (($default.commandline -match 'pwsh') -or ($default.source -match 'PowershellCore') -or ($default.name -match 'PowerShell 7'))) { 'true' } else { 'false' }
+`;
+  const result = await runPowerShellScript(script, { timeoutMs: 10000 });
+  return result.exitCode === 0 && result.stdout.trim().toLowerCase() === 'true';
+}
+
+async function setPowerShell7Default(): Promise<string | null> {
+  const script = `
+$paths = @(
+  "$env:LOCALAPPDATA\\Packages\\Microsoft.WindowsTerminal_8wekyb3d8bbwe\\LocalState\\settings.json",
+  "$env:LOCALAPPDATA\\Packages\\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\\LocalState\\settings.json",
+  "$env:LOCALAPPDATA\\Microsoft\\Windows Terminal\\settings.json"
+)
+$path = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $path) { Write-Error 'Windows Terminal settings.json não encontrado.'; exit 1 }
+$settings = Get-Content $path -Raw | ConvertFrom-Json
+$profiles = @($settings.profiles.list)
+$pwsh = $profiles | Where-Object { ($_.commandline -match 'pwsh') -or ($_.source -match 'PowershellCore') -or ($_.name -match 'PowerShell 7') } | Select-Object -First 1
+if (-not $pwsh) { Write-Error 'Perfil do PowerShell 7 não encontrado no Windows Terminal.'; exit 1 }
+$previous = [string]$settings.defaultProfile
+$settings.defaultProfile = $pwsh.guid
+$settings | ConvertTo-Json -Depth 100 | Set-Content $path -Encoding UTF8
+$previous
+`;
+  const result = await runPowerShellScript(script, { timeoutMs: 15000 });
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || result.stdout || 'Não foi possível definir PowerShell 7 como padrão.');
+  }
+  return result.stdout.trim() || null;
+}
+
+async function restoreWindowsTerminalDefault(profileGuid: string): Promise<void> {
+  const settingsPath = await getWindowsTerminalSettingsPath();
+  if (!settingsPath) {
+    throw new Error('Windows Terminal settings.json não encontrado.');
+  }
+
+  const script = `
+$path = ${JSON.stringify(settingsPath)}
+$settings = Get-Content $path -Raw | ConvertFrom-Json
+$settings.defaultProfile = ${JSON.stringify(profileGuid)}
+$settings | ConvertTo-Json -Depth 100 | Set-Content $path -Encoding UTF8
+`;
+  const result = await runPowerShellScript(script, { timeoutMs: 15000 });
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || result.stdout || 'Não foi possível restaurar o shell padrão anterior.');
+  }
+}
+
+async function readServiceStartModes(): Promise<Record<string, string>> {
+  const names = OPTIONAL_MANUAL_SERVICES.map((name) => `'${name}'`).join(',');
+  const script = `
+$names = @(${names})
+$items = foreach ($name in $names) {
+  $svc = Get-CimInstance Win32_Service -Filter "Name='$name'" -ErrorAction SilentlyContinue
+  if ($svc) { [pscustomobject]@{ Name = $svc.Name; StartMode = $svc.StartMode } }
+}
+$items | ConvertTo-Json -Compress
+`;
+  const result = await runPowerShellScript(script, { timeoutMs: 15000 });
+  if (result.exitCode !== 0 || !result.stdout.trim()) return {};
+  const parsed = JSON.parse(result.stdout.trim()) as Array<{ Name: string; StartMode: string }> | { Name: string; StartMode: string };
+  const entries = Array.isArray(parsed) ? parsed : [parsed];
+  return Object.fromEntries(entries.map((entry) => [entry.Name, entry.StartMode]));
 }
 
 async function checkStatus(id: OptimizationId): Promise<OptimizationStatusResult> {
@@ -233,6 +410,148 @@ async function checkStatus(id: OptimizationId): Promise<OptimizationStatusResult
               ? 'active'
               : 'inactive'
         };
+      }
+      case 'disable-wifi-sense': {
+        const [oem, hotspot, autoconnect] = await Promise.all([
+          readRegistryValue(WIFI_SENSE_CONFIG_KEY, 'AutoConnectAllowedOEM'),
+          readRegistryValue(WIFI_HOTSPOT_POLICY_KEY, 'value'),
+          readRegistryValue(WIFI_AUTOCONNECT_POLICY_KEY, 'value')
+        ]);
+        return {
+          id,
+          status:
+            registryDwordIsActive(oem.value, 0) === 'active' ||
+            (registryDwordIsActive(hotspot.value, 0) === 'active' &&
+              registryDwordIsActive(autoconnect.value, 0) === 'active')
+              ? 'active'
+              : 'inactive'
+        };
+      }
+      case 'enable-dark-mode': {
+        const [apps, system] = await Promise.all([
+          readRegistryValue(DARK_MODE_KEY, 'AppsUseLightTheme'),
+          readRegistryValue(DARK_MODE_KEY, 'SystemUsesLightTheme')
+        ]);
+        return {
+          id,
+          status:
+            registryDwordIsActive(apps.value, 0) === 'active' &&
+            registryDwordIsActive(system.value, 0) === 'active'
+              ? 'active'
+              : 'inactive'
+        };
+      }
+      case 'enable-end-task-context-menu': {
+        const value = await readRegistryValue(TASKBAR_KEY, 'TaskbarEndTask');
+        return { id, status: registryDwordIsActive(value.value, 1) };
+      }
+      case 'enable-game-mode': {
+        const [allowValue, enabledValue] = await Promise.all([
+          readRegistryValue(GAME_BAR_KEY, 'AllowAutoGameMode'),
+          readRegistryValue(GAME_BAR_KEY, 'AutoGameModeEnabled')
+        ]);
+        return {
+          id,
+          status:
+            registryDwordIsActive(allowValue.value, 1) === 'active' ||
+            registryDwordIsActive(enabledValue.value, 1) === 'active'
+              ? 'active'
+              : 'inactive'
+        };
+      }
+      case 'enable-hags': {
+        const value = await readRegistryValue(GRAPHICS_DRIVERS_KEY, 'HwSchMode');
+        return { id, status: registryDwordIsActive(value.value, 2) };
+      }
+      case 'enable-hpet': {
+        const bcd = await runExecutable('bcdedit.exe', ['/enum', '{current}'], 10000);
+        if (bcd.exitCode !== 0) return { id, status: 'unknown', message: 'Não foi possível ler o BCD.' };
+        return { id, status: /useplatformclock\s+Yes/i.test(bcd.stdout) ? 'active' : 'inactive' };
+      }
+      case 'enable-windowed-game-optimizations': {
+        const value = await readRegistryValue(DIRECTX_GRAPHICS_SETTINGS_KEY, 'SwapEffectUpgradeEnable');
+        return { id, status: registryDwordIsActive(value.value, 1) };
+      }
+      case 'remove-menu-delay': {
+        const value = await readRegistryValue(DESKTOP_KEY, 'MenuShowDelay');
+        return { id, status: registryStringIsActive(value.value, '0') };
+      }
+      case 'optimize-network-settings': {
+        const [throttle, responsiveness] = await Promise.all([
+          readRegistryValue(MULTIMEDIA_SYSTEM_PROFILE_KEY, 'NetworkThrottlingIndex'),
+          readRegistryValue(MULTIMEDIA_SYSTEM_PROFILE_KEY, 'SystemResponsiveness')
+        ]);
+        return {
+          id,
+          status:
+            registryDwordIsActive(throttle.value, 0xffffffff) === 'active' &&
+            registryDwordIsActive(responsiveness.value, 0) === 'active'
+              ? 'active'
+              : 'inactive'
+        };
+      }
+      case 'optimize-nvidia-settings': {
+        if (!(await hasNvidiaGpu())) {
+          return { id, status: 'unknown', message: 'Nenhuma GPU Nvidia foi detectada.' };
+        }
+
+        const marker = await readRegistryValue(ITOBOOST_OPTIMIZATION_MARKERS_KEY, 'NvidiaSafeProfile');
+        return { id, status: registryDwordIsActive(marker.value, 1) };
+      }
+      case 'remove-gaming-apps': {
+        const script = `
+$packages = Get-AppxPackage | Where-Object {
+  $_.Name -like 'Microsoft.Xbox*' -or
+  $_.Name -eq 'Microsoft.GamingApp' -or
+  $_.Name -eq 'Microsoft.GamingServices' -or
+  $_.Name -eq 'Microsoft.XboxGamingOverlay'
+}
+if ($packages) { 'present' } else { 'absent' }
+`;
+        const status = await runPowerShellScript(script, { timeoutMs: 15000 });
+        return {
+          id,
+          status: status.exitCode === 0 && status.stdout.includes('absent') ? 'active' : 'inactive'
+        };
+      }
+      case 'remove-onedrive': {
+        const setupPath = await oneDriveSetupPath();
+        const installed = await runPowerShellScript(
+          "if ((Get-Process OneDrive -ErrorAction SilentlyContinue) -or (Test-Path \"$env:LOCALAPPDATA\\Microsoft\\OneDrive\\OneDrive.exe\")) { 'present' } else { 'absent' }",
+          { timeoutMs: 10000 }
+        );
+        return {
+          id,
+          status: !setupPath && installed.stdout.includes('absent') ? 'active' : 'inactive'
+        };
+      }
+      case 'classic-context-menu': {
+        const value = await runExecutable('reg.exe', ['query', CLASSIC_CONTEXT_MENU_KEY], 10000);
+        return { id, status: value.exitCode === 0 ? 'active' : 'inactive' };
+      }
+      case 'run-disk-cleanup':
+        return { id, status: 'inactive', message: 'A limpeza de disco é uma ação pontual.' };
+      case 'set-powershell7-default':
+        return {
+          id,
+          status: (await isPowerShell7Default()) ? 'active' : 'inactive',
+          message: (await hasPowerShell7()) ? undefined : 'PowerShell 7 não foi encontrado.'
+        };
+      case 'set-services-manual': {
+        const modes = await readServiceStartModes();
+        const values = Object.values(modes);
+        return {
+          id,
+          status: values.length > 0 && values.every((mode) => mode.toLowerCase() === 'manual') ? 'active' : 'inactive'
+        };
+      }
+      case 'set-time-utc': {
+        const value = await readRegistryValue(TIME_ZONE_INFORMATION_KEY, 'RealTimeIsUniversal');
+        return { id, status: registryDwordIsActive(value.value, 1) };
+      }
+      case 'configure-win32-priority-separation': {
+        const value = await readRegistryValue(PRIORITY_CONTROL_KEY, 'Win32PrioritySeparation');
+        return { id, status: registryDwordIsActive(value.value, 38) };
       }
     }
   } catch (error) {
@@ -374,6 +693,183 @@ export async function applyOptimization(id: OptimizationId): Promise<Optimizatio
         await writeRegistryValue(MOUSE_KEY, 'MouseThreshold2', 'REG_SZ', '0');
         response = result(true, 'Aceleração do mouse desativada para o usuário atual.');
         break;
+      case 'disable-wifi-sense':
+        await writeRegistryValue(WIFI_SENSE_CONFIG_KEY, 'AutoConnectAllowedOEM', 'REG_DWORD', 0);
+        await writeRegistryValue(WIFI_HOTSPOT_POLICY_KEY, 'value', 'REG_DWORD', 0);
+        await writeRegistryValue(WIFI_AUTOCONNECT_POLICY_KEY, 'value', 'REG_DWORD', 0);
+        response = result(true, 'WiFi Sense desativado por política do Windows.');
+        break;
+      case 'enable-dark-mode':
+        await writeRegistryValue(DARK_MODE_KEY, 'AppsUseLightTheme', 'REG_DWORD', 0);
+        await writeRegistryValue(DARK_MODE_KEY, 'SystemUsesLightTheme', 'REG_DWORD', 0);
+        response = result(true, 'Modo escuro do Windows ativado.');
+        break;
+      case 'enable-end-task-context-menu':
+        await writeRegistryValue(TASKBAR_KEY, 'TaskbarEndTask', 'REG_DWORD', 1);
+        response = result(true, 'Opção "Finalizar Tarefa" habilitada no menu da barra de tarefas.');
+        break;
+      case 'enable-game-mode':
+        await writeRegistryValue(GAME_BAR_KEY, 'AllowAutoGameMode', 'REG_DWORD', 1);
+        await writeRegistryValue(GAME_BAR_KEY, 'AutoGameModeEnabled', 'REG_DWORD', 1);
+        response = result(true, 'Modo de Jogo do Windows ativado.');
+        break;
+      case 'enable-hags':
+        await writeRegistryValue(GRAPHICS_DRIVERS_KEY, 'HwSchMode', 'REG_DWORD', 2);
+        response = result(true, 'HAGS ativado. Reinicie o PC para concluir.', true, false);
+        break;
+      case 'enable-hpet': {
+        const hpet = await runExecutable('bcdedit.exe', ['/set', 'useplatformclock', 'true'], 10000);
+        response =
+          hpet.exitCode === 0
+            ? result(true, 'HPET ativado. Reinicie o PC para concluir.', true, false)
+            : result(false, 'Não foi possível alterar o BCD. Execute o ItoBoost como administrador.');
+        break;
+      }
+      case 'enable-windowed-game-optimizations':
+        await writeRegistryValue(DIRECTX_GRAPHICS_SETTINGS_KEY, 'SwapEffectUpgradeEnable', 'REG_DWORD', 1);
+        response = result(true, 'Otimizações para jogos em janela ativadas.');
+        break;
+      case 'remove-menu-delay':
+        await writeRegistryValue(DESKTOP_KEY, 'MenuShowDelay', 'REG_SZ', '0');
+        response = result(true, 'Atraso de menus eliminado para o usuário atual.');
+        break;
+      case 'optimize-network-settings': {
+        await writeRegistryValue(MULTIMEDIA_SYSTEM_PROFILE_KEY, 'NetworkThrottlingIndex', 'REG_DWORD', 0xffffffff);
+        await writeRegistryValue(MULTIMEDIA_SYSTEM_PROFILE_KEY, 'SystemResponsiveness', 'REG_DWORD', 0);
+        await runExecutable('netsh.exe', ['int', 'tcp', 'set', 'global', 'rss=enabled'], 10000);
+        await runExecutable('netsh.exe', ['int', 'tcp', 'set', 'global', 'ecncapability=disabled'], 10000);
+        await runExecutable('netsh.exe', ['int', 'tcp', 'set', 'global', 'timestamps=disabled'], 10000);
+        response = result(true, 'Configurações de rede otimizadas para menor latência.');
+        break;
+      }
+      case 'optimize-nvidia-settings': {
+        if (!(await hasNvidiaGpu())) {
+          response = result(false, 'Nenhuma GPU Nvidia foi detectada neste computador.');
+          break;
+        }
+
+        const smiPath = await nvidiaSmiPath();
+        if (!smiPath) {
+          response = result(false, 'GPU Nvidia detectada, mas o utilitário nvidia-smi não está disponível.');
+          break;
+        }
+
+        const nvidia = await runExecutable(smiPath, ['-pm', '1'], 15000);
+        if (nvidia.exitCode !== 0) {
+          response = result(
+            false,
+            'O driver Nvidia não permitiu aplicar o modo de persistência. Nenhuma alteração agressiva foi tentada.'
+          );
+          break;
+        }
+
+        await writeRegistryValue(ITOBOOST_OPTIMIZATION_MARKERS_KEY, 'NvidiaSafeProfile', 'REG_DWORD', 1);
+        response = result(true, 'Configuração segura da Nvidia aplicada pelo nvidia-smi.');
+        break;
+      }
+      case 'remove-gaming-apps': {
+        const removeGamingApps = await runPowerShellScript(
+          `
+$packages = Get-AppxPackage | Where-Object {
+  $_.Name -like 'Microsoft.Xbox*' -or
+  $_.Name -eq 'Microsoft.GamingApp' -or
+  $_.Name -eq 'Microsoft.XboxGamingOverlay'
+}
+foreach ($package in $packages) {
+  Remove-AppxPackage -Package $package.PackageFullName -ErrorAction SilentlyContinue
+}
+'done'
+`,
+          { timeoutMs: 60000 }
+        );
+        response =
+          removeGamingApps.exitCode === 0
+            ? result(true, 'Apps de jogos pré-instalados foram removidos do usuário atual.')
+            : result(false, 'Não foi possível remover os apps de jogos encontrados.');
+        break;
+      }
+      case 'remove-onedrive': {
+        const setupPath = await oneDriveSetupPath();
+        if (!setupPath) {
+          response = result(true, 'OneDrive não foi encontrado neste sistema.', false, true);
+          break;
+        }
+
+        await runExecutable('taskkill.exe', ['/f', '/im', 'OneDrive.exe'], 10000);
+        const uninstall = await runExecutable(setupPath, ['/uninstall'], 60000);
+        await deleteRegistryValue('HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', 'OneDrive');
+        await restartExplorer();
+        response =
+          uninstall.exitCode === 0
+            ? result(true, 'OneDrive removido. O Explorer foi reiniciado.', false, true)
+            : result(false, 'O instalador do OneDrive não concluiu a remoção.', false, true);
+        break;
+      }
+      case 'classic-context-menu':
+        await writeRegistryDefaultValue(CLASSIC_CONTEXT_MENU_KEY, '');
+        await restartExplorer();
+        response = result(true, 'Menu de contexto clássico ativado. O Explorer foi reiniciado.', false, true);
+        break;
+      case 'run-disk-cleanup': {
+        const cleanup = await runExecutable('cleanmgr.exe', ['/verylowdisk'], 300000);
+        response =
+          cleanup.exitCode === 0
+            ? result(true, 'Limpeza de Disco executada com sucesso.')
+            : result(false, 'Não foi possível executar a Limpeza de Disco do Windows.');
+        break;
+      }
+      case 'set-powershell7-default': {
+        if (!(await hasPowerShell7())) {
+          response = result(false, 'PowerShell 7 não foi encontrado. Instale o PowerShell 7 antes de aplicar.');
+          break;
+        }
+
+        const state = await readState();
+        const previous = await setPowerShell7Default();
+        if (previous && !state.previousWindowsTerminalDefaultProfile) {
+          await writeState({ ...state, previousWindowsTerminalDefaultProfile: previous });
+        }
+        response = result(true, 'PowerShell 7 definido como perfil padrão do Windows Terminal.');
+        break;
+      }
+      case 'set-services-manual': {
+        const state = await readState();
+        if (!state.previousServiceStartModes) {
+          await writeState({ ...state, previousServiceStartModes: await readServiceStartModes() });
+        }
+
+        const names = OPTIONAL_MANUAL_SERVICES.map((name) => `'${name}'`).join(',');
+        const serviceResult = await runPowerShellScript(
+          `
+$names = @(${names})
+foreach ($name in $names) {
+  $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+  if ($service) { Set-Service -Name $name -StartupType Manual -ErrorAction SilentlyContinue }
+}
+'done'
+`,
+          { timeoutMs: 30000 }
+        );
+        response =
+          serviceResult.exitCode === 0
+            ? result(true, 'Serviços opcionais definidos como inicialização manual.')
+            : result(false, 'Não foi possível ajustar os serviços opcionais.');
+        break;
+      }
+      case 'set-time-utc':
+        await writeRegistryValue(TIME_ZONE_INFORMATION_KEY, 'RealTimeIsUniversal', 'REG_DWORD', 1);
+        response = result(true, 'Horário em UTC ativado para o relógio do sistema.');
+        break;
+      case 'configure-win32-priority-separation': {
+        const state = await readState();
+        if (state.previousWin32PrioritySeparation === undefined) {
+          const previous = await readRegistryValue(PRIORITY_CONTROL_KEY, 'Win32PrioritySeparation');
+          await writeState({ ...state, previousWin32PrioritySeparation: previous.value });
+        }
+        await writeRegistryValue(PRIORITY_CONTROL_KEY, 'Win32PrioritySeparation', 'REG_DWORD', 38);
+        response = result(true, 'Separação de prioridade Win32 otimizada para programas em primeiro plano.');
+        break;
+      }
     }
 
     await logOptimizationAction(id, 'apply', response.success, response.message);
@@ -485,6 +981,146 @@ export async function revertOptimization(id: OptimizationId): Promise<Optimizati
         await writeRegistryValue(MOUSE_KEY, 'MouseThreshold2', 'REG_SZ', '10');
         response = result(true, 'Aceleração do mouse restaurada para o padrão do Windows.');
         break;
+      case 'disable-wifi-sense':
+        await writeRegistryValue(WIFI_SENSE_CONFIG_KEY, 'AutoConnectAllowedOEM', 'REG_DWORD', 1);
+        await writeRegistryValue(WIFI_HOTSPOT_POLICY_KEY, 'value', 'REG_DWORD', 1);
+        await writeRegistryValue(WIFI_AUTOCONNECT_POLICY_KEY, 'value', 'REG_DWORD', 1);
+        response = result(true, 'WiFi Sense reativado nas políticas conhecidas do Windows.');
+        break;
+      case 'enable-dark-mode':
+        await writeRegistryValue(DARK_MODE_KEY, 'AppsUseLightTheme', 'REG_DWORD', 1);
+        await writeRegistryValue(DARK_MODE_KEY, 'SystemUsesLightTheme', 'REG_DWORD', 1);
+        response = result(true, 'Modo claro do Windows restaurado.');
+        break;
+      case 'enable-end-task-context-menu':
+        await writeRegistryValue(TASKBAR_KEY, 'TaskbarEndTask', 'REG_DWORD', 0);
+        response = result(true, 'Opção "Finalizar Tarefa" removida do menu da barra de tarefas.');
+        break;
+      case 'enable-game-mode':
+        await writeRegistryValue(GAME_BAR_KEY, 'AllowAutoGameMode', 'REG_DWORD', 0);
+        await writeRegistryValue(GAME_BAR_KEY, 'AutoGameModeEnabled', 'REG_DWORD', 0);
+        response = result(true, 'Modo de Jogo do Windows desativado.');
+        break;
+      case 'enable-hags':
+        await writeRegistryValue(GRAPHICS_DRIVERS_KEY, 'HwSchMode', 'REG_DWORD', 1);
+        response = result(true, 'HAGS desativado. Reinicie o PC para concluir.', true, false);
+        break;
+      case 'enable-hpet': {
+        const hpet = await runExecutable('bcdedit.exe', ['/deletevalue', 'useplatformclock'], 10000);
+        response =
+          hpet.exitCode === 0
+            ? result(true, 'HPET voltou ao comportamento automático do Windows. Reinicie o PC para concluir.', true, false)
+            : result(true, 'HPET já não estava forçado no BCD.', true, false);
+        break;
+      }
+      case 'enable-windowed-game-optimizations':
+        await writeRegistryValue(DIRECTX_GRAPHICS_SETTINGS_KEY, 'SwapEffectUpgradeEnable', 'REG_DWORD', 0);
+        response = result(true, 'Otimizações para jogos em janela desativadas.');
+        break;
+      case 'remove-menu-delay':
+        await writeRegistryValue(DESKTOP_KEY, 'MenuShowDelay', 'REG_SZ', '400');
+        response = result(true, 'Atraso padrão de menus restaurado.');
+        break;
+      case 'optimize-network-settings':
+        await writeRegistryValue(MULTIMEDIA_SYSTEM_PROFILE_KEY, 'NetworkThrottlingIndex', 'REG_DWORD', 10);
+        await writeRegistryValue(MULTIMEDIA_SYSTEM_PROFILE_KEY, 'SystemResponsiveness', 'REG_DWORD', 20);
+        await runExecutable('netsh.exe', ['int', 'tcp', 'set', 'global', 'ecncapability=default'], 10000);
+        await runExecutable('netsh.exe', ['int', 'tcp', 'set', 'global', 'timestamps=default'], 10000);
+        response = result(true, 'Configurações de rede restauradas para valores conservadores do Windows.');
+        break;
+      case 'optimize-nvidia-settings': {
+        const smiPath = await nvidiaSmiPath();
+        if (smiPath) {
+          await runExecutable(smiPath, ['-pm', '0'], 15000);
+        }
+        await deleteRegistryValue(ITOBOOST_OPTIMIZATION_MARKERS_KEY, 'NvidiaSafeProfile');
+        response = result(true, 'Configuração segura da Nvidia revertida quando suportada.');
+        break;
+      }
+      case 'remove-gaming-apps':
+        response = result(false, 'Este ajuste não possui reversão automática. Reinstale os apps pela Microsoft Store.');
+        break;
+      case 'remove-onedrive':
+        response = result(false, 'Este ajuste não possui reversão automática. Reinstale o OneDrive pelo instalador oficial da Microsoft.');
+        break;
+      case 'classic-context-menu':
+        await deleteRegistryKey(CLASSIC_CONTEXT_MENU_ROOT_KEY);
+        await restartExplorer();
+        response = result(true, 'Menu de contexto moderno do Windows 11 restaurado. O Explorer foi reiniciado.', false, true);
+        break;
+      case 'run-disk-cleanup':
+        response = result(false, 'Limpeza de Disco é uma ação pontual e não possui reversão.');
+        break;
+      case 'set-powershell7-default': {
+        const state = await readState();
+        if (!state.previousWindowsTerminalDefaultProfile) {
+          response = result(false, 'Nenhum perfil padrão anterior foi salvo para reverter.');
+          break;
+        }
+
+        await restoreWindowsTerminalDefault(state.previousWindowsTerminalDefaultProfile);
+        response = result(true, 'Perfil padrão anterior do Windows Terminal restaurado.');
+        break;
+      }
+      case 'set-services-manual': {
+        const state = await readState();
+        if (!state.previousServiceStartModes || Object.keys(state.previousServiceStartModes).length === 0) {
+          response = result(false, 'Nenhum estado anterior de serviços foi salvo para reverter.');
+          break;
+        }
+
+        const mapJson = JSON.stringify(state.previousServiceStartModes).replace(/'/g, "''");
+        const serviceResult = await runPowerShellScript(
+          `
+$modes = '${mapJson}' | ConvertFrom-Json
+foreach ($property in $modes.PSObject.Properties) {
+  $name = $property.Name
+  $mode = [string]$property.Value
+  $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+  if ($service) {
+    $startupType = switch ($mode.ToLower()) {
+      'auto' { 'Automatic' }
+      'automatic' { 'Automatic' }
+      'manual' { 'Manual' }
+      'disabled' { 'Disabled' }
+      default { 'Manual' }
+    }
+    Set-Service -Name $name -StartupType $startupType -ErrorAction SilentlyContinue
+  }
+}
+'done'
+`,
+          { timeoutMs: 30000 }
+        );
+        response =
+          serviceResult.exitCode === 0
+            ? result(true, 'Serviços opcionais restaurados para os modos anteriores salvos.')
+            : result(false, 'Não foi possível restaurar os serviços opcionais.');
+        break;
+      }
+      case 'set-time-utc':
+        await deleteRegistryValue(TIME_ZONE_INFORMATION_KEY, 'RealTimeIsUniversal');
+        response = result(true, 'Configuração de horário UTC removida.');
+        break;
+      case 'configure-win32-priority-separation': {
+        const state = await readState();
+        if (state.previousWin32PrioritySeparation === undefined) {
+          response = result(false, 'Nenhum valor anterior de prioridade Win32 foi salvo para reverter.');
+          break;
+        }
+
+        if (state.previousWin32PrioritySeparation) {
+          const normalized = state.previousWin32PrioritySeparation.toLowerCase();
+          const previous = normalized.startsWith('0x')
+            ? Number.parseInt(normalized, 16)
+            : Number.parseInt(normalized, 10);
+          await writeRegistryValue(PRIORITY_CONTROL_KEY, 'Win32PrioritySeparation', 'REG_DWORD', previous);
+        } else {
+          await deleteRegistryValue(PRIORITY_CONTROL_KEY, 'Win32PrioritySeparation');
+        }
+        response = result(true, 'Separação de prioridade Win32 restaurada para o valor anterior.');
+        break;
+      }
     }
 
     await logOptimizationAction(id, 'revert', response.success, response.message);
