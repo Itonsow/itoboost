@@ -55,7 +55,7 @@ export const pageSubtitles: Record<PageKey, string> = {
   cleanup: 'Ferramentas de limpeza segura em preparação',
   csgo: 'Comandos prontos para copiar e colar',
   restore: 'Pontos de restauração e reversão em preparação',
-  apps: 'Gerenciamento de aplicativos em preparação',
+  apps: 'Instalador rapido de apps essenciais',
   settings: 'Preferências do ItoBoost em preparação',
   auth: 'Conta e autenticação em preparação'
 };

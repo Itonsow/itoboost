@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ItoBoostWindowApi } from '../src/types/electron';
+import type { AppInstallId, AppInstallResult, AppListResult } from '../src/types/apps';
 import type { CleanupId, CleanupListResult, CleanupRunResult } from '../src/types/cleanup';
 import type {
   CreateRestorePointResult,
@@ -25,6 +26,10 @@ const api: ItoBoostWindowApi = {
   cleanup: {
     getAll: () => ipcRenderer.invoke('cleanup:list') as Promise<CleanupListResult>,
     run: (ids: CleanupId[]) => ipcRenderer.invoke('cleanup:run', ids) as Promise<CleanupRunResult>
+  },
+  apps: {
+    getAll: () => ipcRenderer.invoke('apps:list') as Promise<AppListResult>,
+    install: (id: AppInstallId) => ipcRenderer.invoke('apps:install', id) as Promise<AppInstallResult>
   },
   windowControls: {
     minimize: () => ipcRenderer.send('window:minimize'),

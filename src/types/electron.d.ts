@@ -1,4 +1,5 @@
 import type { SystemInfo } from './system';
+import type { AppInstallId, AppInstallResult, AppListResult } from './apps';
 import type { CleanupId, CleanupListResult, CleanupRunResult } from './cleanup';
 import type {
   CreateRestorePointResult,
@@ -23,6 +24,10 @@ export interface ItoBoostWindowApi {
   cleanup: {
     getAll: () => Promise<CleanupListResult>;
     run: (ids: CleanupId[]) => Promise<CleanupRunResult>;
+  };
+  apps: {
+    getAll: () => Promise<AppListResult>;
+    install: (id: AppInstallId) => Promise<AppInstallResult>;
   };
   windowControls: {
     minimize: () => void;

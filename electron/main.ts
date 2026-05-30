@@ -11,6 +11,7 @@ import {
   revertOptimization
 } from './services/windowsOptimizationService';
 import { isCleanupId, listCleanupTasks, runCleanupTasks } from './services/windowsCleanupService';
+import { installApp, isAppInstallId, listInstallableApps } from './services/appInstallService';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -138,6 +139,23 @@ ipcMain.handle('cleanup:run', async (_event, ids: unknown) => {
   }
 
   return runCleanupTasks(ids.filter(isCleanupId));
+});
+
+ipcMain.handle('apps:list', async () => {
+  return listInstallableApps();
+});
+
+ipcMain.handle('apps:install', async (_event, id: unknown) => {
+  if (!isAppInstallId(id)) {
+    return {
+      id: 'brave',
+      success: false,
+      message: 'Aplicativo invalido.',
+      status: 'unknown'
+    };
+  }
+
+  return installApp(id);
 });
 
 ipcMain.on('window:minimize', (event) => {
