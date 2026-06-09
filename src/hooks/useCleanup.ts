@@ -59,15 +59,18 @@ export function useCleanup() {
       setResult(response);
       setLastCleanupAt(response.lastCleanupAt);
       if (response.success) {
+        const cleanedIds = new Set(response.results.filter((item) => item.success).map((item) => item.id));
+        setTasks((current) =>
+          current.map((task) => (cleanedIds.has(task.id) ? { ...task, estimatedBytes: 0 } : task))
+        );
         setSelectedIds([]);
-        await refresh();
       }
     } catch (unknownError) {
       setError(unknownError instanceof Error ? unknownError.message : 'Não foi possível executar a limpeza.');
     } finally {
       setIsRunning(false);
     }
-  }, [refresh, selectedIds]);
+  }, [selectedIds]);
 
   return {
     tasks,

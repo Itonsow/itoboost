@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { memo } from 'react';
 import { OptimizationStatusBadge } from './OptimizationStatusBadge';
 import type { OptimizationId, OptimizationViewModel } from '../../types/optimization';
 
@@ -80,7 +81,7 @@ const iconMap: Record<string, LucideIcon> = {
   gauge: Gauge
 };
 
-export function OptimizationCard({
+function OptimizationCardComponent({
   optimization,
   pendingAction,
   isRunning,
@@ -218,3 +219,5 @@ export function OptimizationCard({
     </motion.article>
   );
 }
+
+export const OptimizationCard = memo(OptimizationCardComponent);

@@ -3,6 +3,7 @@ import { optimizationCategories } from '../data/optimizations';
 import {
   applyOptimization,
   createRestorePoint,
+  getOptimizationStatus,
   getOptimizations,
   isRunningAsAdmin,
   revertOptimization
@@ -95,6 +96,15 @@ export function useOptimizations() {
     });
   }, []);
 
+  const refreshOptimizationStatus = useCallback(async (id: OptimizationId) => {
+    const status = await getOptimizationStatus(id);
+    setOptimizations((current) =>
+      current.map((optimization) =>
+        optimization.id === id ? { ...optimization, status: status.status } : optimization
+      )
+    );
+  }, []);
+
   const runAction = useCallback(
     async (id: OptimizationId, action: PendingAction, options: { createRestorePointFirst?: boolean } = {}) => {
       setRunningId(id);
@@ -125,7 +135,14 @@ export function useOptimizations() {
 
         if (response.success) {
           setPendingAction(id, null);
-          await refresh();
+          setOptimizations((current) =>
+            current.map((optimization) =>
+              optimization.id === id
+                ? { ...optimization, status: action === 'apply' ? 'active' : 'inactive' }
+                : optimization
+            )
+          );
+          void refreshOptimizationStatus(id);
         }
       } catch (unknownError) {
         setMessages((current) => ({
@@ -140,7 +157,7 @@ export function useOptimizations() {
         setRunningId(null);
       }
     },
-    [refresh, setPendingAction]
+    [refreshOptimizationStatus, setPendingAction]
   );
 
   return {

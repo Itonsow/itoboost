@@ -160,6 +160,26 @@ function registryStringIsActive(value: string | null, activeValue: string): Opti
   return value.trim().toLowerCase() === activeValue.toLowerCase() ? 'active' : 'inactive';
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return results;
+}
+
 async function getWindowsBuild(): Promise<number | null> {
   const currentVersion = await readRegistryValue('HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion', 'CurrentBuild');
   return currentVersion.value ? Number.parseInt(currentVersion.value, 10) : null;
@@ -186,6 +206,130 @@ $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
   const result = await runPowerShellScript(script, { timeoutMs: 10000 });
   const setupPath = result.stdout.trim();
   return result.exitCode === 0 && setupPath ? setupPath : null;
+}
+
+async function hasOneDriveKnownFolderPaths(): Promise<boolean> {
+  const script = `
+$keys = @(
+  'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders',
+  'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders'
+)
+$names = @('Personal', 'Desktop', 'My Pictures')
+foreach ($key in $keys) {
+  $item = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+  foreach ($name in $names) {
+    $value = [string]$item.PSObject.Properties[$name].Value
+    $expanded = [Environment]::ExpandEnvironmentVariables($value)
+    if ($expanded -match '\\\\OneDrive(\\\\|$)') { 'present'; exit 0 }
+  }
+}
+'absent'
+`;
+  const result = await runPowerShellScript(script, { timeoutMs: 10000 });
+  return result.exitCode === 0 && result.stdout.includes('present');
+}
+
+async function hasOneDriveInstallation(): Promise<boolean> {
+  const script = `
+if (Get-Process OneDrive -ErrorAction SilentlyContinue) { 'present'; exit 0 }
+if (Test-Path "$env:LOCALAPPDATA\\Microsoft\\OneDrive\\OneDrive.exe") { 'present'; exit 0 }
+if (Test-Path "$env:LOCALAPPDATA\\Microsoft\\OneDrive\\OneDrive.App.exe") { 'present'; exit 0 }
+if (Get-AppxPackage *OneDrive* -ErrorAction SilentlyContinue) { 'present'; exit 0 }
+'absent'
+`;
+  const result = await runPowerShellScript(script, { timeoutMs: 10000 });
+  return result.exitCode === 0 && result.stdout.includes('present');
+}
+
+async function restoreKnownFoldersFromOneDrive(): Promise<void> {
+  const script = `
+$ErrorActionPreference = 'Stop'
+$folderMap = @(
+  @{ UserShellName = 'Personal'; ShellName = 'Personal'; Source = "$env:USERPROFILE\\OneDrive\\Documents"; Target = "$env:USERPROFILE\\Documents"; UserShellValue = '%USERPROFILE%\\Documents' },
+  @{ UserShellName = 'Desktop'; ShellName = 'Desktop'; Source = "$env:USERPROFILE\\OneDrive\\Desktop"; Target = "$env:USERPROFILE\\Desktop"; UserShellValue = '%USERPROFILE%\\Desktop' },
+  @{ UserShellName = 'My Pictures'; ShellName = 'My Pictures'; Source = "$env:USERPROFILE\\OneDrive\\Pictures"; Target = "$env:USERPROFILE\\Pictures"; UserShellValue = '%USERPROFILE%\\Pictures' }
+)
+
+foreach ($folder in $folderMap) {
+  New-Item -ItemType Directory -Path $folder.Target -Force | Out-Null
+  if (Test-Path -LiteralPath $folder.Source) {
+    robocopy $folder.Source $folder.Target /E /XC /XN /XO /R:1 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -gt 7) { throw "Falha ao copiar arquivos de $($folder.Source) para $($folder.Target)." }
+  }
+
+  reg add 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders' /v $folder.UserShellName /t REG_EXPAND_SZ /d $folder.UserShellValue /f | Out-Null
+  reg add 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders' /v $folder.ShellName /t REG_SZ /d $folder.Target /f | Out-Null
+}
+'done'
+`;
+  const result = await runPowerShellScript(script, { timeoutMs: 60000 });
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || result.stdout || 'Não foi possível restaurar as pastas do usuário fora do OneDrive.');
+  }
+}
+
+async function removeModernOneDrivePackage(): Promise<void> {
+  const script = `
+$packages = Get-AppxPackage *OneDrive* -ErrorAction SilentlyContinue
+foreach ($package in $packages) {
+  Remove-AppxPackage -Package $package.PackageFullName -ErrorAction SilentlyContinue
+}
+'done'
+`;
+  const result = await runPowerShellScript(script, { timeoutMs: 120000 });
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || result.stdout || 'Não foi possível remover o pacote moderno do OneDrive.');
+  }
+}
+
+async function removeOneDriveAppData(): Promise<void> {
+  const script = `
+$path = "$env:LOCALAPPDATA\\Microsoft\\OneDrive"
+if (Test-Path -LiteralPath $path) {
+  Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+}
+'done'
+`;
+  const result = await runPowerShellScript(script, { timeoutMs: 30000 });
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || result.stdout || 'Não foi possível remover os arquivos de aplicativo do OneDrive.');
+  }
+}
+
+async function removeOneDriveUserFolder(): Promise<void> {
+  const script = `
+$ErrorActionPreference = 'Stop'
+$path = Join-Path $env:USERPROFILE 'OneDrive'
+$resolved = Resolve-Path -LiteralPath $path -ErrorAction SilentlyContinue
+if (-not $resolved) { 'done'; exit 0 }
+
+$keys = @(
+  'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders',
+  'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders'
+)
+$names = @('Personal', 'Desktop', 'My Pictures')
+foreach ($key in $keys) {
+  $item = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+  foreach ($name in $names) {
+    $value = [string]$item.PSObject.Properties[$name].Value
+    $expanded = [Environment]::ExpandEnvironmentVariables($value)
+    if ($expanded -and $expanded.StartsWith($resolved.Path, [StringComparison]::OrdinalIgnoreCase)) {
+      throw "A pasta $path ainda está em uso pelo Windows como $name."
+    }
+  }
+}
+
+if ($resolved.Path -ne $path) {
+  throw "Caminho inesperado para a pasta OneDrive: $($resolved.Path)."
+}
+
+Remove-Item -LiteralPath $resolved.Path -Recurse -Force
+'done'
+`;
+  const result = await runPowerShellScript(script, { timeoutMs: 60000 });
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || result.stdout || 'Não foi possível remover a pasta residual do OneDrive.');
+  }
 }
 
 async function nvidiaSmiPath(): Promise<string | null> {
@@ -515,14 +659,13 @@ if ($packages) { 'present' } else { 'absent' }
         };
       }
       case 'remove-onedrive': {
-        const setupPath = await oneDriveSetupPath();
-        const installed = await runPowerShellScript(
-          "if ((Get-Process OneDrive -ErrorAction SilentlyContinue) -or (Test-Path \"$env:LOCALAPPDATA\\Microsoft\\OneDrive\\OneDrive.exe\")) { 'present' } else { 'absent' }",
-          { timeoutMs: 10000 }
-        );
+        const [hasRedirectedFolders, installed] = await Promise.all([
+          hasOneDriveKnownFolderPaths(),
+          hasOneDriveInstallation()
+        ]);
         return {
           id,
-          status: !setupPath && installed.stdout.includes('absent') ? 'active' : 'inactive'
+          status: !hasRedirectedFolders && !installed ? 'active' : 'inactive'
         };
       }
       case 'classic-context-menu': {
@@ -564,7 +707,7 @@ if ($packages) { 'present' } else { 'absent' }
 }
 
 export async function listOptimizations(): Promise<OptimizationListResult> {
-  const statuses = await Promise.all(optimizationDefinitions.map((item) => checkStatus(item.id)));
+  const statuses = await mapWithConcurrency(optimizationDefinitions, 4, (item) => checkStatus(item.id));
   const byId = new Map(statuses.map((status) => [status.id, status.status]));
 
   return {
@@ -790,18 +933,30 @@ foreach ($package in $packages) {
       }
       case 'remove-onedrive': {
         const setupPath = await oneDriveSetupPath();
+        await restoreKnownFoldersFromOneDrive();
+
         if (!setupPath) {
-          response = result(true, 'OneDrive não foi encontrado neste sistema.', false, true);
+          await removeModernOneDrivePackage();
+          await removeOneDriveAppData();
+          await removeOneDriveUserFolder();
+          await deleteRegistryValue('HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', 'OneDrive');
+          await restartExplorer();
+          response = result(true, 'Pastas do usuário restauradas. OneDrive não foi encontrado neste sistema.', false, true);
           break;
         }
 
         await runExecutable('taskkill.exe', ['/f', '/im', 'OneDrive.exe'], 10000);
         const uninstall = await runExecutable(setupPath, ['/uninstall'], 60000);
+        await removeModernOneDrivePackage();
+        await removeOneDriveAppData();
+        await removeOneDriveUserFolder();
         await deleteRegistryValue('HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', 'OneDrive');
         await restartExplorer();
+        const stillInstalled = await hasOneDriveInstallation();
+        const stillRedirected = await hasOneDriveKnownFolderPaths();
         response =
-          uninstall.exitCode === 0
-            ? result(true, 'OneDrive removido. O Explorer foi reiniciado.', false, true)
+          uninstall.exitCode === 0 || (!stillInstalled && !stillRedirected)
+            ? result(true, 'OneDrive removido e pastas do usuário restauradas. O Explorer foi reiniciado.', false, true)
             : result(false, 'O instalador do OneDrive não concluiu a remoção.', false, true);
         break;
       }

@@ -46,14 +46,26 @@ export function useInstallableApps() {
       try {
         const result = await installApp(id);
         setMessages((current) => ({ ...current, [id]: result }));
-        await refresh();
+        if (result.success) {
+          setApps((current) =>
+            current.map((app) =>
+              app.id === id
+                ? {
+                    ...app,
+                    status: result.status,
+                    version: result.status === 'installed' ? app.version : null
+                  }
+                : app
+            )
+          );
+        }
       } catch (unknownError) {
         setError(unknownError instanceof Error ? unknownError.message : 'Nao foi possivel iniciar a instalacao.');
       } finally {
         setRunningId(null);
       }
     },
-    [refresh]
+    []
   );
 
   return {

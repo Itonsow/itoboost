@@ -439,7 +439,7 @@ export const optimizationDefinitions: OptimizationDefinition[] = [
   {
     id: 'remove-onedrive',
     title: 'Remover OneDrive',
-    description: 'Remove completamente o OneDrive do seu sistema.',
+    description: 'Remove o OneDrive e restaura Documentos, Desktop e Imagens para o perfil local.',
     categories: ['Desempenho', 'Geral', 'Privacidade'],
     icon: 'cloud-off',
     riskLevel: 'high',
@@ -448,7 +448,7 @@ export const optimizationDefinitions: OptimizationDefinition[] = [
     requiresExplorerRestart: true,
     isReversible: false,
     isFavorite: false,
-    warningMessage: 'Remove o aplicativo OneDrive, mas não apaga seus arquivos locais. Confirme sincronização e backups antes de continuar.',
+    warningMessage: 'Remove o aplicativo OneDrive, copia itens ausentes das pastas sincronizadas para o perfil local e apaga a pasta residual OneDrive.',
     applyAction: 'remove-onedrive',
     revertAction: 'remove-onedrive',
     checkStatusAction: 'remove-onedrive'

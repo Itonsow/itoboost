@@ -21,6 +21,9 @@ yarn-error.log*
 pnpm-debug.log*
 itoboost-*.log
 
+# Local machine backups
+backups/
+
 # Editor and OS files
 .vscode/
 .idea/
