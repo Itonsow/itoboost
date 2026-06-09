@@ -12,6 +12,7 @@ import type {
   OptimizationActionResult,
   OptimizationCategory,
   OptimizationId,
+  OptimizationStatus,
   OptimizationViewModel
 } from '../types/optimization';
 
@@ -23,10 +24,19 @@ interface OptimizationMessage {
   text: string;
 }
 
+interface OptimizationsCache {
+  optimizations: OptimizationViewModel[];
+  isAdmin: boolean;
+}
+
+let optimizationsCache: OptimizationsCache | null = null;
+
 export function useOptimizations() {
-  const [optimizations, setOptimizations] = useState<OptimizationViewModel[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [optimizations, setOptimizations] = useState<OptimizationViewModel[]>(
+    () => optimizationsCache?.optimizations ?? []
+  );
+  const [isLoading, setIsLoading] = useState(() => !optimizationsCache);
+  const [isAdmin, setIsAdmin] = useState(() => optimizationsCache?.isAdmin ?? false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<OptimizationCategory>('Todos');
@@ -40,6 +50,7 @@ export function useOptimizations() {
 
     try {
       const [list, adminStatus] = await Promise.all([getOptimizations(), isRunningAsAdmin()]);
+      optimizationsCache = { optimizations: list.optimizations, isAdmin: adminStatus };
       setOptimizations(list.optimizations);
       setIsAdmin(adminStatus);
     } catch (unknownError) {
@@ -54,7 +65,9 @@ export function useOptimizations() {
   }, []);
 
   useEffect(() => {
-    void refresh();
+    if (!optimizationsCache) {
+      void refresh();
+    }
   }, [refresh]);
 
   const filteredOptimizations = useMemo(() => {
@@ -98,11 +111,14 @@ export function useOptimizations() {
 
   const refreshOptimizationStatus = useCallback(async (id: OptimizationId) => {
     const status = await getOptimizationStatus(id);
-    setOptimizations((current) =>
-      current.map((optimization) =>
-        optimization.id === id ? { ...optimization, status: status.status } : optimization
-      )
-    );
+    setOptimizations((current) => {
+      const nextOptimizations = current.map((optimization) => {
+        const next = optimization.id === id ? { ...optimization, status: status.status } : optimization;
+        return next;
+      });
+      optimizationsCache = { optimizations: nextOptimizations, isAdmin: optimizationsCache?.isAdmin ?? false };
+      return nextOptimizations;
+    });
   }, []);
 
   const runAction = useCallback(
@@ -135,13 +151,18 @@ export function useOptimizations() {
 
         if (response.success) {
           setPendingAction(id, null);
-          setOptimizations((current) =>
-            current.map((optimization) =>
-              optimization.id === id
-                ? { ...optimization, status: action === 'apply' ? 'active' : 'inactive' }
-                : optimization
-            )
-          );
+          const optimisticStatus: OptimizationStatus = action === 'apply' ? 'active' : 'inactive';
+          setOptimizations((current) => {
+            const nextOptimizations = current.map((optimization) => {
+              const next =
+                optimization.id === id
+                  ? { ...optimization, status: optimisticStatus }
+                  : optimization;
+              return next;
+            });
+            optimizationsCache = { optimizations: nextOptimizations, isAdmin: optimizationsCache?.isAdmin ?? false };
+            return nextOptimizations;
+          });
           void refreshOptimizationStatus(id);
         }
       } catch (unknownError) {

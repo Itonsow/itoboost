@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { getSystemInfo } from '../services/systemService';
 import type { SystemInfo } from '../types/system';
 
@@ -9,17 +9,20 @@ interface UseSystemInfoResult {
   refetch: () => Promise<void>;
 }
 
+let systemInfoCache: SystemInfo | null = null;
+
 export function useSystemInfo(): UseSystemInfoResult {
-  const [data, setData] = useState<SystemInfo | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [data, setData] = useState<SystemInfo | null>(() => systemInfoCache);
+  const [isLoading, setIsLoading] = useState(() => !systemInfoCache);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchSystemInfo = async () => {
+  const fetchSystemInfo = useCallback(async () => {
     setIsLoading(true);
     setError(null);
 
     try {
       const info = await getSystemInfo();
+      systemInfoCache = info;
       setData(info);
     } catch (unknownError) {
       const message =
@@ -30,11 +33,13 @@ export function useSystemInfo(): UseSystemInfoResult {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    void fetchSystemInfo();
-  }, []);
+    if (!systemInfoCache) {
+      void fetchSystemInfo();
+    }
+  }, [fetchSystemInfo]);
 
   return {
     data,

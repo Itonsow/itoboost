@@ -1,5 +1,4 @@
 import { Github, MessageCircle, Twitch } from 'lucide-react';
-import { motion } from 'framer-motion';
 import { navigationItems, type PageKey } from '../../constants/navigation';
 
 interface SidebarProps {
@@ -21,28 +20,24 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
       </div>
 
       <nav className="space-y-2">
-        {navigationItems.map((item, index) => {
+        {navigationItems.map((item) => {
           const Icon = item.icon;
           const isActive = activePage === item.id;
 
           return (
-            <motion.button
-              animate={{ opacity: 1, x: 0 }}
+            <button
               className={`group relative flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-semibold transition duration-200 ${
                 isActive
                   ? 'border border-cyan-300/25 bg-blue-500/15 text-white shadow-glow'
                   : 'border border-transparent text-slate-400 hover:border-white/[0.08] hover:bg-white/[0.045] hover:text-slate-100'
               }`}
-              initial={{ opacity: 0, x: -12 }}
               key={item.id}
               onClick={() => onNavigate(item.id)}
-              transition={{ delay: index * 0.035, duration: 0.28, ease: 'easeOut' }}
               type="button"
             >
               {isActive && (
-                <motion.span
+                <span
                   className="absolute left-0 top-1/2 h-7 w-1 -translate-y-1/2 rounded-r-full bg-cyan-300"
-                  layoutId="active-sidebar-rail"
                 />
               )}
               <span
@@ -55,7 +50,7 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
                 <Icon size={18} />
               </span>
               {item.label}
-            </motion.button>
+            </button>
           );
         })}
       </nav>

@@ -34,7 +34,6 @@ import {
   Zap
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { motion } from 'framer-motion';
 import { memo } from 'react';
 import { OptimizationStatusBadge } from './OptimizationStatusBadge';
 import type { OptimizationId, OptimizationViewModel } from '../../types/optimization';
@@ -108,11 +107,8 @@ function OptimizationCardComponent({
   };
 
   return (
-    <motion.article
-      animate={{ opacity: 1, y: 0 }}
+    <article
       className="group relative overflow-hidden rounded-[1.75rem] border border-white/[0.08] bg-white/[0.045] p-5 shadow-panel backdrop-blur-xl transition duration-300 hover:-translate-y-1 hover:border-cyan-300/25 hover:bg-white/[0.065]"
-      initial={{ opacity: 0, y: 18 }}
-      transition={{ duration: 0.35, ease: 'easeOut' }}
     >
       <div className="absolute right-0 top-0 h-32 w-32 bg-cyan-300/[0.06] blur-3xl transition group-hover:bg-cyan-300/[0.12]" />
 
@@ -216,7 +212,7 @@ function OptimizationCardComponent({
           <span className="font-mono text-xs uppercase tracking-[0.14em] text-slate-500">Alteração pendente</span>
         )}
       </div>
-    </motion.article>
+    </article>
   );
 }
 

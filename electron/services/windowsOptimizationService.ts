@@ -504,15 +504,17 @@ async function checkStatus(id: OptimizationId): Promise<OptimizationStatusResult
         return { id, status: registryDwordIsActive(value.value, 0) };
       }
       case 'disable-game-bar': {
-        const [captureValue, dvrValue] = await Promise.all([
+        const [captureValue, dvrValue, startupPanelValue] = await Promise.all([
           readRegistryValue(GAME_DVR_KEY, 'AppCaptureEnabled'),
-          readRegistryValue(GAME_CONFIG_STORE_KEY, 'GameDVR_Enabled')
+          readRegistryValue(GAME_CONFIG_STORE_KEY, 'GameDVR_Enabled'),
+          readRegistryValue(GAME_BAR_KEY, 'ShowStartupPanel')
         ]);
         return {
           id,
           status:
             registryDwordIsActive(captureValue.value, 0) === 'active' &&
-            registryDwordIsActive(dvrValue.value, 0) === 'active'
+            registryDwordIsActive(dvrValue.value, 0) === 'active' &&
+            registryDwordIsActive(startupPanelValue.value, 0) === 'active'
               ? 'active'
               : 'inactive'
         };
@@ -810,7 +812,7 @@ export async function applyOptimization(id: OptimizationId): Promise<Optimizatio
       case 'disable-game-bar':
         await writeRegistryValue(GAME_DVR_KEY, 'AppCaptureEnabled', 'REG_DWORD', 0);
         await writeRegistryValue(GAME_CONFIG_STORE_KEY, 'GameDVR_Enabled', 'REG_DWORD', 0);
-        await writeRegistryValue(GAME_BAR_KEY, 'AutoGameModeEnabled', 'REG_DWORD', 0);
+        await writeRegistryValue(GAME_BAR_KEY, 'ShowStartupPanel', 'REG_DWORD', 0);
         response = result(true, 'Barra de Jogos do Xbox desativada para o usuário atual.');
         break;
       case 'disable-hibernation': {
@@ -879,10 +881,14 @@ export async function applyOptimization(id: OptimizationId): Promise<Optimizatio
       case 'optimize-network-settings': {
         await writeRegistryValue(MULTIMEDIA_SYSTEM_PROFILE_KEY, 'NetworkThrottlingIndex', 'REG_DWORD', 0xffffffff);
         await writeRegistryValue(MULTIMEDIA_SYSTEM_PROFILE_KEY, 'SystemResponsiveness', 'REG_DWORD', 0);
-        await runExecutable('netsh.exe', ['int', 'tcp', 'set', 'global', 'rss=enabled'], 10000);
-        await runExecutable('netsh.exe', ['int', 'tcp', 'set', 'global', 'ecncapability=disabled'], 10000);
-        await runExecutable('netsh.exe', ['int', 'tcp', 'set', 'global', 'timestamps=disabled'], 10000);
-        response = result(true, 'Configurações de rede otimizadas para menor latência.');
+        const netshResults = await Promise.all([
+          runExecutable('netsh.exe', ['int', 'tcp', 'set', 'global', 'rss=enabled'], 10000),
+          runExecutable('netsh.exe', ['int', 'tcp', 'set', 'global', 'ecncapability=disabled'], 10000),
+          runExecutable('netsh.exe', ['int', 'tcp', 'set', 'global', 'timestamps=disabled'], 10000)
+        ]);
+        response = netshResults.every((item) => item.exitCode === 0)
+          ? result(true, 'Configurações de rede otimizadas para menor latência.')
+          : result(false, 'Parte das configurações de rede foi bloqueada pelo Windows ou pelo driver.');
         break;
       }
       case 'optimize-nvidia-settings': {
@@ -916,6 +922,7 @@ export async function applyOptimization(id: OptimizationId): Promise<Optimizatio
 $packages = Get-AppxPackage | Where-Object {
   $_.Name -like 'Microsoft.Xbox*' -or
   $_.Name -eq 'Microsoft.GamingApp' -or
+  $_.Name -eq 'Microsoft.GamingServices' -or
   $_.Name -eq 'Microsoft.XboxGamingOverlay'
 }
 foreach ($package in $packages) {
@@ -1110,7 +1117,7 @@ export async function revertOptimization(id: OptimizationId): Promise<Optimizati
       case 'disable-game-bar':
         await writeRegistryValue(GAME_DVR_KEY, 'AppCaptureEnabled', 'REG_DWORD', 1);
         await writeRegistryValue(GAME_CONFIG_STORE_KEY, 'GameDVR_Enabled', 'REG_DWORD', 1);
-        await writeRegistryValue(GAME_BAR_KEY, 'AutoGameModeEnabled', 'REG_DWORD', 1);
+        await writeRegistryValue(GAME_BAR_KEY, 'ShowStartupPanel', 'REG_DWORD', 1);
         response = result(true, 'Barra de Jogos do Xbox reativada para o usuário atual.');
         break;
       case 'disable-hibernation': {
@@ -1179,9 +1186,15 @@ export async function revertOptimization(id: OptimizationId): Promise<Optimizati
       case 'optimize-network-settings':
         await writeRegistryValue(MULTIMEDIA_SYSTEM_PROFILE_KEY, 'NetworkThrottlingIndex', 'REG_DWORD', 10);
         await writeRegistryValue(MULTIMEDIA_SYSTEM_PROFILE_KEY, 'SystemResponsiveness', 'REG_DWORD', 20);
-        await runExecutable('netsh.exe', ['int', 'tcp', 'set', 'global', 'ecncapability=default'], 10000);
-        await runExecutable('netsh.exe', ['int', 'tcp', 'set', 'global', 'timestamps=default'], 10000);
-        response = result(true, 'Configurações de rede restauradas para valores conservadores do Windows.');
+        {
+          const netshResults = await Promise.all([
+            runExecutable('netsh.exe', ['int', 'tcp', 'set', 'global', 'ecncapability=default'], 10000),
+            runExecutable('netsh.exe', ['int', 'tcp', 'set', 'global', 'timestamps=default'], 10000)
+          ]);
+          response = netshResults.every((item) => item.exitCode === 0)
+            ? result(true, 'Configurações de rede restauradas para valores conservadores do Windows.')
+            : result(false, 'Parte das configurações de rede não pôde ser restaurada pelo netsh.');
+        }
         break;
       case 'optimize-nvidia-settings': {
         const smiPath = await nvidiaSmiPath();

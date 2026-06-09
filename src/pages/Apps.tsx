@@ -18,7 +18,9 @@ import {
   Wrench
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { ActionProgressPopup } from '../components/ui/ActionProgressPopup';
 import { Card } from '../components/ui/Card';
+import { useActionProgress } from '../hooks/useActionProgress';
 import { useInstallableApps } from '../hooks/useInstallableApps';
 import type { AppCategory, AppInstallId, AppInstallItem } from '../types/apps';
 
@@ -145,6 +147,8 @@ function AppInstallCard({
 export function Apps() {
   const { apps, wingetAvailable, isLoading, runningId, error, messages, counts, refresh, runInstall } =
     useInstallableApps();
+  const runningApp = runningId ? apps.find((app) => app.id === runningId) : null;
+  const actionProgress = useActionProgress(Boolean(runningId));
 
   return (
     <div className="mx-auto max-w-[1560px] space-y-7">
@@ -223,6 +227,19 @@ export function Apps() {
           ))}
         </section>
       )}
+
+      <ActionProgressPopup
+        description={
+          actionProgress.isComplete
+            ? 'Ação concluída.'
+            : runningApp
+            ? `${runningApp.installKind === 'external' ? 'Abrindo download oficial' : 'Instalando via winget'}: ${runningApp.name}`
+            : 'Executando ação selecionada.'
+        }
+        isVisible={actionProgress.isVisible}
+        progress={actionProgress.progress}
+        title="Ação de app em andamento"
+      />
     </div>
   );
 }

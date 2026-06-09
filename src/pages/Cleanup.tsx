@@ -1,9 +1,10 @@
-import { motion } from 'framer-motion';
 import { Brush, Loader2, RefreshCcw } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { CleanupConfirmModal } from '../components/cleanup/CleanupConfirmModal';
 import { CleanupTaskRow } from '../components/cleanup/CleanupTaskRow';
+import { ActionProgressPopup } from '../components/ui/ActionProgressPopup';
 import { Card } from '../components/ui/Card';
+import { useActionProgress } from '../hooks/useActionProgress';
 import { useCleanup } from '../hooks/useCleanup';
 
 function formatCleanupBytes(value: number | null): string {
@@ -39,6 +40,7 @@ export function Cleanup() {
     executeCleanup
   } = useCleanup();
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const actionProgress = useActionProgress(isRunning);
 
   const needsConfirmation = useMemo(
     () =>
@@ -61,11 +63,8 @@ export function Cleanup() {
 
   return (
     <div className="mx-auto max-w-[1560px] space-y-6">
-      <motion.section
-        animate={{ opacity: 1, y: 0 }}
+      <section
         className="rounded-[2rem] border border-white/[0.08] bg-white/[0.045] p-5 shadow-panel backdrop-blur-xl"
-        initial={{ opacity: 0, y: 14 }}
-        transition={{ duration: 0.35, ease: 'easeOut' }}
       >
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-4">
@@ -90,7 +89,7 @@ export function Cleanup() {
             Atualizar
           </button>
         </div>
-      </motion.section>
+      </section>
 
       <Card className="overflow-hidden">
         {isLoading ? (
@@ -160,6 +159,17 @@ export function Cleanup() {
           tasks={selectedTasks}
         />
       )}
+
+      <ActionProgressPopup
+        description={
+          actionProgress.isComplete
+            ? 'Limpeza concluída.'
+            : `${selectedIds.length} limpeza(s) selecionada(s), ${formatCleanupBytes(selectedBytes)} estimados.`
+        }
+        isVisible={actionProgress.isVisible}
+        progress={actionProgress.progress}
+        title="Limpeza em andamento"
+      />
     </div>
   );
 }

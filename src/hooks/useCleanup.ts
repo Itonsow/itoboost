@@ -2,11 +2,18 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getCleanupTasks, runCleanup } from '../services/cleanupService';
 import type { CleanupId, CleanupRunResult, CleanupTask } from '../types/cleanup';
 
+interface CleanupCache {
+  tasks: CleanupTask[];
+  lastCleanupAt: string | null;
+}
+
+let cleanupCache: CleanupCache | null = null;
+
 export function useCleanup() {
-  const [tasks, setTasks] = useState<CleanupTask[]>([]);
+  const [tasks, setTasks] = useState<CleanupTask[]>(() => cleanupCache?.tasks ?? []);
   const [selectedIds, setSelectedIds] = useState<CleanupId[]>([]);
-  const [lastCleanupAt, setLastCleanupAt] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [lastCleanupAt, setLastCleanupAt] = useState<string | null>(() => cleanupCache?.lastCleanupAt ?? null);
+  const [isLoading, setIsLoading] = useState(() => !cleanupCache);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CleanupRunResult | null>(null);
@@ -17,6 +24,7 @@ export function useCleanup() {
 
     try {
       const response = await getCleanupTasks();
+      cleanupCache = { tasks: response.tasks, lastCleanupAt: response.lastCleanupAt };
       setTasks(response.tasks);
       setLastCleanupAt(response.lastCleanupAt);
     } catch (unknownError) {
@@ -29,7 +37,9 @@ export function useCleanup() {
   }, []);
 
   useEffect(() => {
-    void refresh();
+    if (!cleanupCache) {
+      void refresh();
+    }
   }, [refresh]);
 
   const selectedTasks = useMemo(
@@ -60,9 +70,11 @@ export function useCleanup() {
       setLastCleanupAt(response.lastCleanupAt);
       if (response.success) {
         const cleanedIds = new Set(response.results.filter((item) => item.success).map((item) => item.id));
-        setTasks((current) =>
-          current.map((task) => (cleanedIds.has(task.id) ? { ...task, estimatedBytes: 0 } : task))
-        );
+        setTasks((current) => {
+          const nextTasks = current.map((task) => (cleanedIds.has(task.id) ? { ...task, estimatedBytes: 0 } : task));
+          cleanupCache = { tasks: nextTasks, lastCleanupAt: response.lastCleanupAt };
+          return nextTasks;
+        });
         setSelectedIds([]);
       }
     } catch (unknownError) {

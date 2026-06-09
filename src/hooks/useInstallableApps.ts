@@ -2,10 +2,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getInstallableApps, installApp } from '../services/appInstallService';
 import type { AppInstallId, AppInstallItem, AppInstallResult } from '../types/apps';
 
+interface InstallableAppsCache {
+  apps: AppInstallItem[];
+  wingetAvailable: boolean;
+}
+
+let installableAppsCache: InstallableAppsCache | null = null;
+
 export function useInstallableApps() {
-  const [apps, setApps] = useState<AppInstallItem[]>([]);
-  const [wingetAvailable, setWingetAvailable] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [apps, setApps] = useState<AppInstallItem[]>(() => installableAppsCache?.apps ?? []);
+  const [wingetAvailable, setWingetAvailable] = useState(() => installableAppsCache?.wingetAvailable ?? false);
+  const [isLoading, setIsLoading] = useState(() => !installableAppsCache);
   const [runningId, setRunningId] = useState<AppInstallId | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Partial<Record<AppInstallId, AppInstallResult>>>({});
@@ -16,6 +23,7 @@ export function useInstallableApps() {
 
     try {
       const response = await getInstallableApps();
+      installableAppsCache = { apps: response.apps, wingetAvailable: response.wingetAvailable };
       setApps(response.apps);
       setWingetAvailable(response.wingetAvailable);
     } catch (unknownError) {
@@ -26,7 +34,9 @@ export function useInstallableApps() {
   }, []);
 
   useEffect(() => {
-    void refresh();
+    if (!installableAppsCache) {
+      void refresh();
+    }
   }, [refresh]);
 
   const counts = useMemo(
@@ -47,8 +57,8 @@ export function useInstallableApps() {
         const result = await installApp(id);
         setMessages((current) => ({ ...current, [id]: result }));
         if (result.success) {
-          setApps((current) =>
-            current.map((app) =>
+          setApps((current) => {
+            const nextApps = current.map((app) =>
               app.id === id
                 ? {
                     ...app,
@@ -56,8 +66,13 @@ export function useInstallableApps() {
                     version: result.status === 'installed' ? app.version : null
                   }
                 : app
-            )
-          );
+            );
+            installableAppsCache = {
+              apps: nextApps,
+              wingetAvailable: installableAppsCache?.wingetAvailable ?? wingetAvailable
+            };
+            return nextApps;
+          });
         }
       } catch (unknownError) {
         setError(unknownError instanceof Error ? unknownError.message : 'Nao foi possivel iniciar a instalacao.');
@@ -65,7 +80,7 @@ export function useInstallableApps() {
         setRunningId(null);
       }
     },
-    []
+    [wingetAvailable]
   );
 
   return {
