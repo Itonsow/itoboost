@@ -16,7 +16,6 @@ import {
   deleteRegistryKey,
   deleteRegistryValue,
   readRegistryValue,
-  writeRegistryDefaultValue,
   writeRegistryValue
 } from './registryService';
 
@@ -183,6 +182,35 @@ async function mapWithConcurrency<T, R>(
 async function getWindowsBuild(): Promise<number | null> {
   const currentVersion = await readRegistryValue('HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion', 'CurrentBuild');
   return currentVersion.value ? Number.parseInt(currentVersion.value, 10) : null;
+}
+
+async function registryKeyExists(path: string): Promise<boolean> {
+  const query = await runExecutable('reg.exe', ['query', path], 10000);
+  return query.exitCode === 0;
+}
+
+async function enableClassicContextMenu(): Promise<void> {
+  const write = await runExecutable(
+    'reg.exe',
+    ['add', CLASSIC_CONTEXT_MENU_KEY, '/ve', '/t', 'REG_SZ', '/d', '', '/f'],
+    10000
+  );
+
+  if (write.exitCode !== 0) {
+    throw new Error(write.stderr || write.stdout || 'Falha ao ativar o menu de contexto clássico.');
+  }
+
+  if (!(await registryKeyExists(CLASSIC_CONTEXT_MENU_KEY))) {
+    throw new Error('A chave do menu de contexto clássico não foi criada no registro.');
+  }
+}
+
+async function disableClassicContextMenu(): Promise<void> {
+  await deleteRegistryKey(CLASSIC_CONTEXT_MENU_ROOT_KEY);
+
+  if (await registryKeyExists(CLASSIC_CONTEXT_MENU_KEY)) {
+    throw new Error('A chave do menu de contexto clássico ainda existe no registro.');
+  }
 }
 
 async function hasNvidiaGpu(): Promise<boolean> {
@@ -968,9 +996,14 @@ foreach ($package in $packages) {
         break;
       }
       case 'classic-context-menu':
-        await writeRegistryDefaultValue(CLASSIC_CONTEXT_MENU_KEY, '');
+        await enableClassicContextMenu();
         await restartExplorer();
-        response = result(true, 'Menu de contexto clássico ativado. O Explorer foi reiniciado.', false, true);
+        response = result(
+          true,
+          'Menu de contexto clássico do Windows 10 ativado. O Explorer foi reiniciado.',
+          false,
+          true
+        );
         break;
       case 'run-disk-cleanup': {
         const cleanup = await runExecutable('cleanmgr.exe', ['/verylowdisk'], 300000);
@@ -1212,7 +1245,7 @@ export async function revertOptimization(id: OptimizationId): Promise<Optimizati
         response = result(false, 'Este ajuste não possui reversão automática. Reinstale o OneDrive pelo instalador oficial da Microsoft.');
         break;
       case 'classic-context-menu':
-        await deleteRegistryKey(CLASSIC_CONTEXT_MENU_ROOT_KEY);
+        await disableClassicContextMenu();
         await restartExplorer();
         response = result(true, 'Menu de contexto moderno do Windows 11 restaurado. O Explorer foi reiniciado.', false, true);
         break;
