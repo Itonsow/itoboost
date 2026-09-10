@@ -1,26 +1,37 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  getOperationState,
+  subscribeOperationState,
+  type OperationStatus
+} from '../services/operationState';
+
+type VisibleOperationStatus = Exclude<OperationStatus, 'idle'>;
 
 interface ActionProgressState {
   isVisible: boolean;
   isComplete: boolean;
+  isFailed: boolean;
   progress: number;
+  status: VisibleOperationStatus;
+  title: string;
+  description: string;
 }
 
-export function useActionProgress(isRunning: boolean): ActionProgressState {
-  const [isVisible, setIsVisible] = useState(false);
-  const [isComplete, setIsComplete] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const wasRunningRef = useRef(false);
+export function useActionProgress(): ActionProgressState {
+  const operation = useSyncExternalStore(subscribeOperationState, getOperationState, getOperationState);
+  const [isVisible, setIsVisible] = useState(operation.status !== 'idle');
+  const [progress, setProgress] = useState(operation.status === 'running' ? 0 : 100);
+  const lastTokenRef = useRef<number | null>(operation.token);
 
   useEffect(() => {
     let intervalId: number | undefined;
     let timeoutId: number | undefined;
 
-    if (isRunning) {
-      wasRunningRef.current = true;
+    if (operation.status === 'running') {
+      const isNewOperation = operation.token !== lastTokenRef.current;
+      lastTokenRef.current = operation.token;
       setIsVisible(true);
-      setIsComplete(false);
-      setProgress(0);
+      if (isNewOperation) setProgress(0);
 
       intervalId = window.setInterval(() => {
         setProgress((current) => {
@@ -29,24 +40,35 @@ export function useActionProgress(isRunning: boolean): ActionProgressState {
           return Math.min(current + step, 94);
         });
       }, 420);
-    } else if (wasRunningRef.current) {
-      wasRunningRef.current = false;
+    } else if (operation.status === 'success' || operation.status === 'error') {
+      lastTokenRef.current = operation.token;
       setIsVisible(true);
-      setIsComplete(true);
       setProgress(100);
 
       timeoutId = window.setTimeout(() => {
         setIsVisible(false);
-        setIsComplete(false);
-        setProgress(0);
-      }, 900);
+      }, 1200);
+    } else {
+      lastTokenRef.current = null;
+      setIsVisible(false);
+      setProgress(0);
     }
 
     return () => {
-      if (intervalId) window.clearInterval(intervalId);
-      if (timeoutId) window.clearTimeout(timeoutId);
+      if (intervalId !== undefined) window.clearInterval(intervalId);
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
     };
-  }, [isRunning]);
+  }, [operation]);
 
-  return { isVisible, isComplete, progress };
+  const status: VisibleOperationStatus = operation.status === 'idle' ? 'running' : operation.status;
+
+  return {
+    isVisible,
+    isComplete: isVisible && status !== 'running',
+    isFailed: isVisible && status === 'error',
+    progress,
+    status,
+    title: operation.title,
+    description: operation.description
+  };
 }

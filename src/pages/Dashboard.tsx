@@ -7,13 +7,17 @@ import { SystemInfoPanel } from '../components/dashboard/SystemInfoPanel';
 import { useSystemInfo } from '../hooks/useSystemInfo';
 import { formatBytes, formatCores, formatGpuMemory, textFallback } from '../utils/formatters';
 
-export function Dashboard() {
+interface DashboardProps {
+  onOpenOptimizations: () => void;
+}
+
+export function Dashboard({ onOpenOptimizations }: DashboardProps) {
   const { data, error, isLoading, refetch } = useSystemInfo();
 
   const cards = [
     {
       title: 'Processador',
-      value: data ? textFallback(data.cpu.brand) : 'Carregando CPU',
+      value: data ? textFallback(data.cpu.brand) : isLoading ? 'Carregando CPU' : 'CPU indisponível',
       detail: data ? `${formatCores(data.cpu.cores)} ${data.cpu.speedGhz ? `• ${data.cpu.speedGhz.toFixed(1)} GHz` : ''}` : '',
       badge: 'CPU',
       icon: Cpu,
@@ -21,7 +25,7 @@ export function Dashboard() {
     },
     {
       title: 'Gráficos',
-      value: data ? textFallback(data.gpu.model) : 'Carregando GPU',
+      value: data ? textFallback(data.gpu.model) : isLoading ? 'Carregando GPU' : 'GPU indisponível',
       detail: data ? formatGpuMemory(data.gpu.vramMb) : '',
       badge: 'GPU',
       icon: MonitorUp,
@@ -29,7 +33,7 @@ export function Dashboard() {
     },
     {
       title: 'Memória',
-      value: data ? formatBytes(data.memory.totalBytes) : 'Carregando RAM',
+      value: data ? formatBytes(data.memory.totalBytes) : isLoading ? 'Carregando RAM' : 'RAM indisponível',
       detail: 'Memória total instalada',
       badge: 'RAM',
       icon: MemoryStick,
@@ -37,7 +41,7 @@ export function Dashboard() {
     },
     {
       title: 'Armazenamento',
-      value: data ? formatBytes(data.storage.sizeBytes) : 'Carregando disco',
+      value: data ? formatBytes(data.storage.sizeBytes) : isLoading ? 'Carregando disco' : 'Disco indisponível',
       detail: data ? textFallback(data.storage.type, 'Tipo indisponível') : '',
       badge: 'DISK',
       icon: HardDrive,
@@ -77,7 +81,7 @@ export function Dashboard() {
         </div>
       )}
 
-      <HeroBanner />
+      <HeroBanner onOpenOptimizations={onOpenOptimizations} />
 
       <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
         {cards.map((card, index) => (

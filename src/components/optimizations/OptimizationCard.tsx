@@ -42,6 +42,7 @@ interface OptimizationCardProps {
   optimization: OptimizationViewModel;
   pendingAction: 'apply' | 'revert' | undefined;
   isRunning: boolean;
+  isBusy: boolean;
   isAdmin: boolean;
   message?: { tone: 'success' | 'error' | 'info'; text: string };
   onPendingChange: (id: OptimizationId, action: 'apply' | 'revert' | null) => void;
@@ -84,6 +85,7 @@ function OptimizationCardComponent({
   optimization,
   pendingAction,
   isRunning,
+  isBusy,
   isAdmin,
   message,
   onPendingChange,
@@ -95,9 +97,10 @@ function OptimizationCardComponent({
   const hasAdminWarning = optimization.requiresAdmin && !isAdmin;
   const showApply = pendingAction === 'apply';
   const showRevert = pendingAction === 'revert' || (isActive && optimization.isReversible);
+  const canToggle = !isActive || optimization.isReversible;
 
   const handleToggle = () => {
-    if (isRunning) return;
+    if (isRunning || isBusy || !canToggle) return;
 
     if (isChecked) {
       onPendingChange(optimization.id, isActive ? 'revert' : null);
@@ -126,9 +129,11 @@ function OptimizationCardComponent({
 
         <button
           aria-checked={isChecked}
+          aria-label={`${optimization.title}: ${isChecked ? 'ativo' : 'inativo'}`}
           className={`relative h-7 w-12 rounded-full border transition ${
             isChecked ? 'border-cyan-300/45 bg-cyan-400/25' : 'border-white/[0.10] bg-slate-950/60'
-          }`}
+          } disabled:cursor-not-allowed disabled:opacity-50`}
+          disabled={isRunning || isBusy || !canToggle}
           onClick={handleToggle}
           role="switch"
           type="button"
@@ -147,7 +152,7 @@ function OptimizationCardComponent({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-2">
-            <h3 className="text-xl font-bold leading-7 text-white">{optimization.title}</h3>
+            <h2 className="text-xl font-bold leading-7 text-white">{optimization.title}</h2>
             {optimization.isFavorite && <Star className="mt-1 shrink-0 fill-orange-300 text-orange-300" size={16} />}
             {optimization.riskLevel === 'high' && <AlertTriangle className="mt-1 shrink-0 text-red-200" size={16} />}
           </div>
@@ -187,7 +192,7 @@ function OptimizationCardComponent({
         {showApply && (
           <button
             className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-cyan-300/25 bg-cyan-400/15 px-4 text-sm font-bold text-cyan-50 transition hover:bg-cyan-400/25 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={isRunning}
+            disabled={isRunning || isBusy}
             onClick={() => onRun(optimization, 'apply')}
             type="button"
           >
@@ -199,7 +204,7 @@ function OptimizationCardComponent({
         {showRevert && (
           <button
             className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-white/[0.10] bg-white/[0.045] px-4 text-sm font-bold text-slate-200 transition hover:border-orange-300/25 hover:bg-orange-400/10 hover:text-orange-100 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={isRunning}
+            disabled={isRunning || isBusy}
             onClick={() => onRun(optimization, 'revert')}
             type="button"
           >

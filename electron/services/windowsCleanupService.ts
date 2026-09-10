@@ -4,7 +4,7 @@ import path from 'node:path';
 import { cleanupDefinitions } from '../../src/data/cleanup';
 import type { CleanupId, CleanupListResult, CleanupRunResult } from '../../src/types/cleanup';
 import { isRunningAsAdmin } from './adminService';
-import { runExecutable, runPowerShellScript } from './powershellService';
+import { commandFailureMessage, runExecutable, runPowerShellScript } from './powershellService';
 
 interface CleanupState {
   lastCleanupAt: string | null;
@@ -88,36 +88,72 @@ Get-ChildItem "$env:LOCALAPPDATA\\Microsoft\\Windows\\Explorer\\thumbcache_*.db"
   }
 }
 
+function toError(error: unknown, fallback: string): Error {
+  return error instanceof Error ? error : new Error(fallback);
+}
+
+async function stopExplorer(): Promise<void> {
+  const stop = await runExecutable('taskkill.exe', ['/f', '/im', 'explorer.exe'], 10000);
+  if (stop.failure && stop.failure !== 'exit-error') {
+    throw new Error(commandFailureMessage(stop, 'Não foi possível encerrar o Explorer.'));
+  }
+}
+
+async function startExplorer(): Promise<void> {
+  const start = await runPowerShellScript('Start-Process explorer.exe -ErrorAction Stop', { timeoutMs: 10000 });
+  if (start.exitCode !== 0) {
+    throw new Error(commandFailureMessage(start, 'Não foi possível reiniciar o Explorer.'));
+  }
+}
+
 async function restartExplorer(): Promise<void> {
-  await runExecutable('taskkill.exe', ['/f', '/im', 'explorer.exe'], 10000);
-  await runPowerShellScript('Start-Process explorer.exe', { timeoutMs: 10000 });
+  await stopExplorer();
+
+  await startExplorer();
 }
 
 async function removePathContents(pathsExpression: string): Promise<void> {
   const result = await runPowerShellScript(
     `
 $paths = ${pathsExpression}
+$errors = [System.Collections.Generic.List[string]]::new()
 foreach ($path in $paths) {
-  if (Test-Path $path) {
-    Get-ChildItem -LiteralPath $path -Force -ErrorAction SilentlyContinue |
-      Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
+  if (-not (Test-Path -LiteralPath $path)) { continue }
+
+  try {
+    $items = @(Get-ChildItem -LiteralPath $path -Force -ErrorAction Stop)
+  } catch {
+    [void]$errors.Add($path + ': ' + $_.Exception.Message)
+    continue
   }
+
+  foreach ($item in $items) {
+    try {
+      Remove-Item -LiteralPath $item.FullName -Force -Recurse -ErrorAction Stop
+    } catch {
+      [void]$errors.Add($item.FullName + ': ' + $_.Exception.Message)
+    }
+  }
+}
+
+if ($errors.Count -gt 0) {
+  $errors | Select-Object -First 5 | ForEach-Object { Write-Error $_ }
+  exit 1
 }
 `,
     { timeoutMs: 120000 }
   );
 
   if (result.exitCode !== 0) {
-    throw new Error(result.stderr || result.stdout || 'Falha ao remover arquivos.');
+    throw new Error(commandFailureMessage(result, 'Falha ao remover arquivos.'));
   }
 }
 
 async function runSingleCleanup(id: CleanupId): Promise<SingleCleanupResult> {
-  const beforeBytes = await estimateTaskBytes(id);
-
   try {
     switch (id) {
-      case 'temp-files':
+      case 'temp-files': {
+        const beforeBytes = await estimateTaskBytes(id);
         await removePathContents('@($env:TEMP, "$env:WINDIR\\Temp")');
         return {
           id,
@@ -125,7 +161,8 @@ async function runSingleCleanup(id: CleanupId): Promise<SingleCleanupResult> {
           message: 'Arquivos temporários removidos.',
           cleanedBytes: beforeBytes
         };
-      case 'prefetch-files':
+      }
+      case 'prefetch-files': {
         if (!(await isRunningAsAdmin())) {
           return {
             id,
@@ -134,6 +171,7 @@ async function runSingleCleanup(id: CleanupId): Promise<SingleCleanupResult> {
             cleanedBytes: null
           };
         }
+        const beforeBytes = await estimateTaskBytes(id);
         await removePathContents('@("$env:WINDIR\\Prefetch")');
         return {
           id,
@@ -141,16 +179,21 @@ async function runSingleCleanup(id: CleanupId): Promise<SingleCleanupResult> {
           message: 'Arquivos Prefetch removidos.',
           cleanedBytes: beforeBytes
         };
+      }
       case 'recycle-bin': {
+        const beforeBytes = await estimateTaskBytes(id);
         const result = await runPowerShellScript('Clear-RecycleBin -Force -ErrorAction Stop', { timeoutMs: 120000 });
         return {
           id,
           success: result.exitCode === 0,
-          message: result.exitCode === 0 ? 'Lixeira esvaziada.' : 'Não foi possível esvaziar a Lixeira.',
+          message:
+            result.exitCode === 0
+              ? 'Lixeira esvaziada.'
+              : commandFailureMessage(result, 'Não foi possível esvaziar a Lixeira.'),
           cleanedBytes: result.exitCode === 0 ? beforeBytes : null
         };
       }
-      case 'windows-update-cache':
+      case 'windows-update-cache': {
         if (!(await isRunningAsAdmin())) {
           return {
             id,
@@ -159,28 +202,81 @@ async function runSingleCleanup(id: CleanupId): Promise<SingleCleanupResult> {
             cleanedBytes: null
           };
         }
-        await runPowerShellScript('Stop-Service wuauserv,bits -Force -ErrorAction SilentlyContinue', { timeoutMs: 30000 });
-        await removePathContents('@("$env:WINDIR\\SoftwareDistribution\\Download")');
-        await runPowerShellScript('Start-Service bits,wuauserv -ErrorAction SilentlyContinue', { timeoutMs: 30000 });
+
+        const beforeBytes = await estimateTaskBytes(id);
+        let cleanupError: Error | null = null;
+        try {
+          const stopServices = await runPowerShellScript('Stop-Service wuauserv,bits -Force -ErrorAction Stop', {
+            timeoutMs: 30000
+          });
+          if (stopServices.exitCode !== 0) {
+            throw new Error(commandFailureMessage(stopServices, 'Não foi possível pausar o Windows Update.'));
+          }
+          await removePathContents('@("$env:WINDIR\\SoftwareDistribution\\Download")');
+        } catch (error) {
+          cleanupError = toError(error, 'Não foi possível limpar o cache do Windows Update.');
+        }
+
+        let restoreError: Error | null = null;
+        try {
+          const startServices = await runPowerShellScript('Start-Service bits,wuauserv -ErrorAction Stop', {
+            timeoutMs: 30000
+          });
+          if (startServices.exitCode !== 0) {
+            throw new Error(commandFailureMessage(startServices, 'Não foi possível reativar o Windows Update.'));
+          }
+        } catch (error) {
+          restoreError = toError(error, 'Não foi possível reativar o Windows Update.');
+        }
+
+        if (cleanupError || restoreError) {
+          const details = [cleanupError?.message, restoreError?.message].filter(Boolean).join(' ');
+          throw new Error(details || 'Falha ao limpar o cache do Windows Update.');
+        }
+
         return {
           id,
           success: true,
           message: 'Cache do Windows Update removido.',
           cleanedBytes: beforeBytes
         };
-      case 'thumbnail-cache':
-        await runExecutable('taskkill.exe', ['/f', '/im', 'explorer.exe'], 10000);
-        await runPowerShellScript(
-          'Remove-Item "$env:LOCALAPPDATA\\Microsoft\\Windows\\Explorer\\thumbcache_*.db" -Force -ErrorAction SilentlyContinue',
-          { timeoutMs: 30000 }
-        );
-        await runPowerShellScript('Start-Process explorer.exe', { timeoutMs: 10000 });
+      }
+      case 'thumbnail-cache': {
+        const beforeBytes = await estimateTaskBytes(id);
+        let removeError: Error | null = null;
+        let restartError: Error | null = null;
+
+        try {
+          await stopExplorer();
+          const removeCache = await runPowerShellScript(
+            '$files = Get-ChildItem "$env:LOCALAPPDATA\\Microsoft\\Windows\\Explorer\\thumbcache_*.db" -Force -ErrorAction SilentlyContinue; if ($files) { $files | Remove-Item -Force -ErrorAction Stop }',
+            { timeoutMs: 30000 }
+          );
+          if (removeCache.exitCode !== 0) {
+            throw new Error(commandFailureMessage(removeCache, 'Não foi possível remover o cache de miniaturas.'));
+          }
+        } catch (error) {
+          removeError = toError(error, 'Não foi possível remover o cache de miniaturas.');
+        } finally {
+          try {
+            await startExplorer();
+          } catch (error) {
+            restartError = toError(error, 'Não foi possível reiniciar o Explorer.');
+          }
+        }
+
+        if (removeError || restartError) {
+          const details = [removeError?.message, restartError?.message].filter(Boolean).join(' ');
+          throw new Error(details || 'Falha ao limpar o cache de miniaturas.');
+        }
+
         return {
           id,
           success: true,
           message: 'Cache de miniaturas removido. O Explorer foi reiniciado.',
           cleanedBytes: beforeBytes
         };
+      }
     }
   } catch (error) {
     return {
@@ -208,7 +304,7 @@ export async function listCleanupTasks(): Promise<CleanupListResult> {
 }
 
 export async function runCleanupTasks(ids: CleanupId[]): Promise<CleanupRunResult> {
-  const validIds = ids.filter(isCleanupId);
+  const validIds = [...new Set(ids.filter(isCleanupId))];
   if (validIds.length === 0) {
     return {
       success: false,
@@ -228,15 +324,26 @@ export async function runCleanupTasks(ids: CleanupId[]): Promise<CleanupRunResul
   const success = results.every((item) => item.success);
   const cleanedValues = results.map((item) => item.cleanedBytes).filter((value): value is number => value !== null);
   const cleanedBytes = cleanedValues.length ? cleanedValues.reduce((total, value) => total + value, 0) : null;
-  const lastCleanupAt = success ? new Date().toISOString() : (await readState()).lastCleanupAt;
+  const previousState = await readState();
+  const nextCleanupAt = new Date().toISOString();
+  let lastCleanupAt = previousState.lastCleanupAt;
+  let message = success ? 'Limpeza concluída com sucesso.' : 'Algumas limpezas não puderam ser concluídas.';
+  let finalSuccess = success;
 
   if (success) {
-    await writeState({ lastCleanupAt });
+    try {
+      await writeState({ lastCleanupAt: nextCleanupAt });
+      lastCleanupAt = nextCleanupAt;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      finalSuccess = false;
+      message = `As limpezas foram executadas, mas o estado não pôde ser salvo. Detalhes: ${detail}`;
+    }
   }
 
   return {
-    success,
-    message: success ? 'Limpeza concluída com sucesso.' : 'Algumas limpezas não puderam ser concluídas.',
+    success: finalSuccess,
+    message,
     cleanedBytes,
     requiresExplorerRestart: validIds.includes('thumbnail-cache'),
     results,

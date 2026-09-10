@@ -1,5 +1,5 @@
 import { Check, Clipboard, Crosshair, Radar, Shield } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Card } from '../components/ui/Card';
 
 const commandGroups = [
@@ -15,19 +15,80 @@ const commandGroups = [
     title: 'Safezone',
     description: 'Ajusta a área segura da HUD para aproximar elementos da interface.',
     icon: Shield,
-    commands: ['safezonex 0.9', 'sefezoney 0.9']
+    commands: ['safezonex 0.9', 'safezoney 0.9']
   }
 ];
 
 type CommandGroupId = (typeof commandGroups)[number]['id'];
 
+async function copyToClipboard(text: string): Promise<void> {
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      let timeoutId: number | undefined;
+      try {
+        await Promise.race([
+          navigator.clipboard.writeText(text),
+          new Promise<never>((_, reject) => {
+            timeoutId = window.setTimeout(() => reject(new Error('A área de transferência não respondeu.')), 1000);
+          })
+        ]);
+      } finally {
+        if (timeoutId !== undefined) {
+          window.clearTimeout(timeoutId);
+        }
+      }
+      return;
+    }
+  } catch {
+    // Tenta o caminho compatível abaixo quando o contexto bloquear a Clipboard API.
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+
+  try {
+    if (!document.execCommand('copy')) {
+      throw new Error('A cópia foi bloqueada pelo sistema.');
+    }
+  } finally {
+    textarea.remove();
+  }
+}
+
 export function Csgo() {
   const [copiedId, setCopiedId] = useState<CommandGroupId | 'all' | null>(null);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const resetCopyTimeout = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (resetCopyTimeout.current !== null) {
+        window.clearTimeout(resetCopyTimeout.current);
+      }
+    };
+  }, []);
 
   const copyText = async (id: CommandGroupId | 'all', text: string) => {
-    await navigator.clipboard.writeText(text);
-    setCopiedId(id);
-    window.setTimeout(() => setCopiedId(null), 1600);
+    setCopyError(null);
+
+    try {
+      await copyToClipboard(text);
+      setCopiedId(id);
+      if (resetCopyTimeout.current !== null) {
+        window.clearTimeout(resetCopyTimeout.current);
+      }
+      resetCopyTimeout.current = window.setTimeout(() => setCopiedId(null), 1600);
+    } catch (unknownError) {
+      setCopiedId(null);
+      setCopyError(
+        unknownError instanceof Error ? unknownError.message : 'Não foi possível copiar os comandos para a área de transferência.'
+      );
+    }
   };
 
   const allCommands = commandGroups.flatMap((group) => group.commands).join('\n');
@@ -53,6 +114,12 @@ export function Csgo() {
           {copiedId === 'all' ? 'Copiado' : 'Copiar tudo'}
         </button>
       </section>
+
+      {copyError && (
+        <div className="rounded-3xl border border-orange-300/20 bg-orange-400/10 px-5 py-4 text-sm text-orange-100" role="alert">
+          {copyError}
+        </div>
+      )}
 
       <section className="grid gap-5 xl:grid-cols-2">
         {commandGroups.map((group) => {

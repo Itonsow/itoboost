@@ -9,16 +9,21 @@ export async function logOptimizationAction(
   success: boolean,
   message: string
 ): Promise<void> {
-  const logDir = path.join(app.getPath('userData'), 'logs');
-  const logPath = path.join(logDir, 'optimizations.log');
-  const line = JSON.stringify({
-    at: new Date().toISOString(),
-    id,
-    action,
-    success,
-    message
-  });
+  try {
+    const logDir = path.join(app.getPath('userData'), 'logs');
+    const logPath = path.join(logDir, 'optimizations.log');
+    const line = JSON.stringify({
+      at: new Date().toISOString(),
+      id,
+      action,
+      success,
+      message
+    });
 
-  await fs.mkdir(logDir, { recursive: true });
-  await fs.appendFile(logPath, `${line}\n`, 'utf8');
+    await fs.mkdir(logDir, { recursive: true });
+    await fs.appendFile(logPath, `${line}\n`, 'utf8');
+  } catch (unknownError) {
+    const detail = unknownError instanceof Error ? unknownError.message : String(unknownError);
+    console.error('[ItoBoost] Não foi possível gravar o log da otimização:', detail);
+  }
 }

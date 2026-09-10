@@ -1,17 +1,62 @@
 import { shell } from 'electron';
 import { appDefinitions } from '../../src/data/apps';
 import type { AppInstallId, AppInstallItem, AppInstallResult, AppListResult } from '../../src/types/apps';
-import { runExecutable } from './powershellService';
+import { commandFailureMessage, runExecutable } from './powershellService';
 
 const appIds = new Set<AppInstallId>(appDefinitions.map((item) => item.id));
+const WINGET_STATUS_CONCURRENCY = 3;
 
 export function isAppInstallId(value: unknown): value is AppInstallId {
   return typeof value === 'string' && appIds.has(value as AppInstallId);
 }
 
-async function isWingetAvailable(): Promise<boolean> {
-  const result = await runExecutable('winget.exe', ['--version'], 10000);
-  return result.exitCode === 0;
+interface WingetAvailability {
+  available: boolean;
+  message: string | null;
+}
+
+interface WingetStatus {
+  status: 'installed' | 'available' | 'unknown';
+  version: string | null;
+  message: string | null;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (true) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      if (currentIndex >= items.length) return;
+      results[currentIndex] = await mapper(items[currentIndex]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return results;
+}
+
+async function getWingetAvailability(): Promise<WingetAvailability> {
+  try {
+    const result = await runExecutable('winget.exe', ['--version'], 10000);
+    if (result.exitCode === 0) {
+      return { available: true, message: null };
+    }
+
+    return {
+      available: false,
+      message: commandFailureMessage(result, 'O winget não está disponível neste Windows.')
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { available: false, message: `Não foi possível verificar o winget. Detalhes: ${detail}` };
+  }
 }
 
 function parseWingetListVersion(output: string, wingetId: string): string | null {
@@ -26,57 +71,94 @@ function parseWingetListVersion(output: string, wingetId: string): string | null
   return parts.length >= 3 ? parts[2] : null;
 }
 
-async function getWingetStatus(wingetId: string): Promise<{ installed: boolean; version: string | null }> {
-  const result = await runExecutable(
-    'winget.exe',
-    ['list', '--id', wingetId, '--exact', '--accept-source-agreements'],
-    30000
-  );
+async function getWingetStatus(wingetId: string): Promise<WingetStatus> {
+  try {
+    const result = await runExecutable(
+      'winget.exe',
+      ['list', '--id', wingetId, '--exact', '--accept-source-agreements'],
+      30000
+    );
 
-  const output = `${result.stdout}\n${result.stderr}`;
-  const installed = result.exitCode === 0 && output.includes(wingetId);
+    if (result.exitCode !== 0) {
+      return {
+        status: 'unknown',
+        version: null,
+        message: commandFailureMessage(result, `Não foi possível consultar o status de ${wingetId}.`)
+      };
+    }
 
+    const output = `${result.stdout}\n${result.stderr}`;
+    const installed = output.includes(wingetId);
+
+    return {
+      status: installed ? 'installed' : 'available',
+      version: installed ? parseWingetListVersion(output, wingetId) : null,
+      message: null
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      status: 'unknown',
+      version: null,
+      message: `Não foi possível consultar o status de ${wingetId}. Detalhes: ${detail}`
+    };
+  }
+}
+
+function withDiagnosticNote(item: AppInstallItem, message: string | null): AppInstallItem {
+  if (!message) return item;
   return {
-    installed,
-    version: installed ? parseWingetListVersion(output, wingetId) : null
+    ...item,
+    note: item.note ? `${item.note} ${message}` : message
   };
 }
 
 export async function listInstallableApps(): Promise<AppListResult> {
-  const wingetAvailable = await isWingetAvailable();
-  const apps: AppInstallItem[] = [];
+  const winget = await getWingetAvailability();
+  const wingetDefinitions = appDefinitions.filter((definition) => definition.installKind === 'winget');
+  const statuses = winget.available
+    ? await mapWithConcurrency(wingetDefinitions, WINGET_STATUS_CONCURRENCY, async (definition) => ({
+        id: definition.id,
+        status: await getWingetStatus(definition.wingetId as string)
+      }))
+    : [];
+  const statusById = new Map(statuses.map((item) => [item.id, item.status]));
 
-  for (const definition of appDefinitions) {
+  const apps = appDefinitions.map((definition) => {
     if (definition.installKind === 'external') {
-      apps.push({
+      return {
         ...definition,
-        status: 'external',
+        status: 'external' as const,
         version: null
-      });
-      continue;
+      };
     }
 
-    if (!wingetAvailable || !definition.wingetId) {
-      apps.push({
-        ...definition,
-        status: 'unknown',
-        version: null
-      });
-      continue;
+    if (!winget.available) {
+      return withDiagnosticNote(
+        {
+          ...definition,
+          status: 'unknown' as const,
+          version: null
+        },
+        winget.message
+      );
     }
 
-    const status = await getWingetStatus(definition.wingetId);
-    apps.push({
-      ...definition,
-      status: status.installed ? 'installed' : 'available',
-      version: status.version
-    });
-  }
+    const status = statusById.get(definition.id);
+    return withDiagnosticNote(
+      {
+        ...definition,
+        status: status?.status ?? 'unknown',
+        version: status?.version ?? null
+      },
+      status?.message ?? null
+    );
+  });
 
-  return { apps, wingetAvailable };
+  return { apps, wingetAvailable: winget.available };
 }
 
-export async function installApp(id: AppInstallId): Promise<AppInstallResult> {
+async function installAppInternal(id: AppInstallId): Promise<AppInstallResult> {
   const definition = appDefinitions.find((item) => item.id === id);
 
   if (!definition) {
@@ -116,11 +198,12 @@ export async function installApp(id: AppInstallId): Promise<AppInstallResult> {
     };
   }
 
-  if (!(await isWingetAvailable())) {
+  const winget = await getWingetAvailability();
+  if (!winget.available) {
     return {
       id,
       success: false,
-      message: 'O winget nao esta disponivel neste Windows.',
+      message: winget.message ?? 'O winget nao esta disponivel neste Windows.',
       status: 'unknown'
     };
   }
@@ -149,7 +232,21 @@ export async function installApp(id: AppInstallId): Promise<AppInstallResult> {
     success,
     message: success
       ? `${definition.name} instalado ou atualizado com sucesso.`
-      : output || `Nao foi possivel instalar ${definition.name}.`,
+      : commandFailureMessage(installResult, output || `Nao foi possivel instalar ${definition.name}.`),
     status: success ? 'installed' : 'available'
   };
+}
+
+export async function installApp(id: AppInstallId): Promise<AppInstallResult> {
+  try {
+    return await installAppInternal(id);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      id,
+      success: false,
+      message: `Não foi possível iniciar a instalação. Detalhes: ${detail}`,
+      status: 'unknown'
+    };
+  }
 }

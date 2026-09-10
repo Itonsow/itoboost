@@ -1,5 +1,5 @@
 import { isRunningAsAdmin } from './adminService';
-import { runPowerShellScript } from './powershellService';
+import { commandFailureMessage, runPowerShellScript } from './powershellService';
 import type { CreateRestorePointResult } from '../../src/types/optimization';
 
 export async function createRestorePoint(): Promise<CreateRestorePointResult> {
@@ -18,8 +18,10 @@ export async function createRestorePoint(): Promise<CreateRestorePointResult> {
   if (result.exitCode !== 0) {
     return {
       success: false,
-      message:
+      message: commandFailureMessage(
+        result,
         'Não foi possível criar o ponto de restauração. Verifique se a Proteção do Sistema está ativa no Windows.'
+      )
     };
   }
 

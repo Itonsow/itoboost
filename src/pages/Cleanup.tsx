@@ -2,13 +2,12 @@ import { Brush, Loader2, RefreshCcw } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { CleanupConfirmModal } from '../components/cleanup/CleanupConfirmModal';
 import { CleanupTaskRow } from '../components/cleanup/CleanupTaskRow';
-import { ActionProgressPopup } from '../components/ui/ActionProgressPopup';
 import { Card } from '../components/ui/Card';
-import { useActionProgress } from '../hooks/useActionProgress';
 import { useCleanup } from '../hooks/useCleanup';
 
 function formatCleanupBytes(value: number | null): string {
   if (value === null) return 'Calculando';
+  if (!Number.isFinite(value)) return 'Indisponível';
   if (value <= 0) return '0 B';
 
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -18,10 +17,13 @@ function formatCleanupBytes(value: number | null): string {
 
 function formatLastCleanup(value: string | null): string {
   if (!value) return 'Ainda não foi limpo';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return 'Data indisponível';
+
   return new Intl.DateTimeFormat('pt-BR', {
     dateStyle: 'short',
     timeStyle: 'short'
-  }).format(new Date(value));
+  }).format(date);
 }
 
 export function Cleanup() {
@@ -40,7 +42,6 @@ export function Cleanup() {
     executeCleanup
   } = useCleanup();
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
-  const actionProgress = useActionProgress(isRunning);
 
   const needsConfirmation = useMemo(
     () =>
@@ -160,16 +161,6 @@ export function Cleanup() {
         />
       )}
 
-      <ActionProgressPopup
-        description={
-          actionProgress.isComplete
-            ? 'Limpeza concluída.'
-            : `${selectedIds.length} limpeza(s) selecionada(s), ${formatCleanupBytes(selectedBytes)} estimados.`
-        }
-        isVisible={actionProgress.isVisible}
-        progress={actionProgress.progress}
-        title="Limpeza em andamento"
-      />
     </div>
   );
 }

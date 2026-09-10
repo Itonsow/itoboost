@@ -1,5 +1,5 @@
 export function formatBytes(bytes: number | null | undefined, decimals = 1): string {
-  if (!bytes || bytes <= 0) return 'Indisponível';
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes <= 0) return 'Indisponível';
 
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
@@ -9,7 +9,7 @@ export function formatBytes(bytes: number | null | undefined, decimals = 1): str
 }
 
 export function formatGpuMemory(vramMb: number | null | undefined): string {
-  if (!vramMb || vramMb <= 0) return 'VRAM indisponível';
+  if (typeof vramMb !== 'number' || !Number.isFinite(vramMb) || vramMb <= 0) return 'VRAM indisponível';
 
   if (vramMb >= 1024) {
     return `${(vramMb / 1024).toFixed(1)} GB VRAM`;
@@ -19,7 +19,7 @@ export function formatGpuMemory(vramMb: number | null | undefined): string {
 }
 
 export function formatCores(cores: number | null | undefined): string {
-  if (!cores || cores <= 0) return 'Núcleos indisponíveis';
+  if (typeof cores !== 'number' || !Number.isFinite(cores) || cores <= 0) return 'Núcleos indisponíveis';
   return `${cores} núcleos`;
 }
 

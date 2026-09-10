@@ -12,17 +12,19 @@ export function SystemInfoPanel({ data, isLoading }: SystemInfoPanelProps) {
   const rows = [
     {
       label: 'SO',
-      value: data ? textFallback(data.os.distro || data.os.platform) : 'Carregando'
+      value: data ? textFallback(data.os.distro || data.os.platform) : isLoading ? 'Carregando' : 'Indisponível'
     },
     {
       label: 'Versão',
-      value: data ? `${textFallback(data.os.release)} ${data.os.arch ? `• ${data.os.arch}` : ''}` : 'Carregando'
+      value: data ? `${textFallback(data.os.release)} ${data.os.arch ? `• ${data.os.arch}` : ''}` : isLoading ? 'Carregando' : 'Indisponível'
     },
     {
       label: 'Modelo do Disco',
       value: data
         ? `${textFallback(data.storage.name)} ${data.storage.sizeBytes ? `• ${formatBytes(data.storage.sizeBytes)}` : ''}`
-        : 'Carregando'
+        : isLoading
+          ? 'Carregando'
+          : 'Indisponível'
     }
   ];
 

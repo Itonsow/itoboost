@@ -5,6 +5,7 @@ interface OptimizationGridProps {
   optimizations: OptimizationViewModel[];
   pendingActions: Partial<Record<OptimizationId, 'apply' | 'revert'>>;
   runningId: OptimizationId | null;
+  isBusy: boolean;
   isAdmin: boolean;
   messages: Partial<Record<OptimizationId, { tone: 'success' | 'error' | 'info'; text: string }>>;
   onPendingChange: (id: OptimizationId, action: 'apply' | 'revert' | null) => void;
@@ -15,6 +16,7 @@ export function OptimizationGrid({
   optimizations,
   pendingActions,
   runningId,
+  isBusy,
   isAdmin,
   messages,
   onPendingChange,
@@ -33,6 +35,7 @@ export function OptimizationGrid({
       {optimizations.map((optimization) => (
         <OptimizationCard
           isAdmin={isAdmin}
+          isBusy={isBusy}
           isRunning={runningId === optimization.id}
           key={optimization.id}
           message={messages[optimization.id]}

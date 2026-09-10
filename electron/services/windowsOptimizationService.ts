@@ -11,7 +11,7 @@ import type {
 } from '../../src/types/optimization';
 import { isRunningAsAdmin } from './adminService';
 import { logOptimizationAction } from './logService';
-import { runExecutable, runPowerShellScript } from './powershellService';
+import { commandFailureMessage, runExecutable, runPowerShellScript } from './powershellService';
 import {
   deleteRegistryKey,
   deleteRegistryValue,
@@ -93,8 +93,22 @@ async function readState(): Promise<OptimizationState> {
 }
 
 async function writeState(state: OptimizationState): Promise<void> {
-  await fs.mkdir(path.dirname(statePath()), { recursive: true });
-  await fs.writeFile(statePath(), JSON.stringify(state, null, 2), 'utf8');
+  const targetPath = statePath();
+  const temporaryPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+  const serialized = JSON.stringify(state, null, 2);
+
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  try {
+    await fs.writeFile(temporaryPath, serialized, 'utf8');
+    await fs.rename(temporaryPath, targetPath);
+  } catch (error) {
+    try {
+      await fs.rm(temporaryPath, { force: true });
+    } catch {
+      // Preserve the original write error.
+    }
+    throw error;
+  }
 }
 
 function result(
@@ -135,16 +149,47 @@ async function getUltimatePowerPlanGuid(): Promise<string> {
 
   const guid = duplicate.stdout.match(GUID_PATTERN)?.[0];
   if (!guid || duplicate.exitCode !== 0) {
-    throw new Error('Não foi possível criar o plano Ultimate Performance neste Windows.');
+    throw new Error(commandFailureMessage(duplicate, 'Não foi possível criar o plano Ultimate Performance neste Windows.'));
   }
 
   await writeState({ ...state, ultimatePowerPlanGuid: guid });
   return guid;
 }
 
+async function stopExplorer(): Promise<void> {
+  const stop = await runExecutable('taskkill.exe', ['/f', '/im', 'explorer.exe'], 10000);
+  if (stop.failure && stop.failure !== 'exit-error') {
+    throw new Error(commandFailureMessage(stop, 'Não foi possível encerrar o Explorer.'));
+  }
+}
+
+async function startExplorer(): Promise<void> {
+  const start = await runPowerShellScript('Start-Process explorer.exe -ErrorAction Stop', { timeoutMs: 10000 });
+  if (start.exitCode !== 0) {
+    throw new Error(commandFailureMessage(start, 'Não foi possível reiniciar o Explorer.'));
+  }
+}
+
 async function restartExplorer(): Promise<void> {
-  await runExecutable('taskkill.exe', ['/f', '/im', 'explorer.exe'], 10000);
-  await runPowerShellScript('Start-Process explorer.exe', { timeoutMs: 10000 });
+  let stopError: Error | null = null;
+
+  try {
+    await stopExplorer();
+  } catch (error) {
+    stopError = error instanceof Error ? error : new Error('Não foi possível encerrar o Explorer.');
+  }
+
+  try {
+    await startExplorer();
+  } catch (error) {
+    const startError = error instanceof Error ? error : new Error('Não foi possível reiniciar o Explorer.');
+    if (stopError) {
+      throw new Error(`${stopError.message} ${startError.message}`);
+    }
+    throw startError;
+  }
+
+  if (stopError) throw stopError;
 }
 
 function registryDwordIsActive(value: string | null, activeValue: number): OptimizationStatus {
@@ -197,7 +242,7 @@ async function enableClassicContextMenu(): Promise<void> {
   );
 
   if (write.exitCode !== 0) {
-    throw new Error(write.stderr || write.stdout || 'Falha ao ativar o menu de contexto clássico.');
+    throw new Error(commandFailureMessage(write, 'Falha ao ativar o menu de contexto clássico.'));
   }
 
   if (!(await registryKeyExists(CLASSIC_CONTEXT_MENU_KEY))) {
@@ -292,7 +337,7 @@ foreach ($folder in $folderMap) {
 `;
   const result = await runPowerShellScript(script, { timeoutMs: 60000 });
   if (result.exitCode !== 0) {
-    throw new Error(result.stderr || result.stdout || 'Não foi possível restaurar as pastas do usuário fora do OneDrive.');
+    throw new Error(commandFailureMessage(result, 'Não foi possível restaurar as pastas do usuário fora do OneDrive.'));
   }
 }
 
@@ -306,7 +351,7 @@ foreach ($package in $packages) {
 `;
   const result = await runPowerShellScript(script, { timeoutMs: 120000 });
   if (result.exitCode !== 0) {
-    throw new Error(result.stderr || result.stdout || 'Não foi possível remover o pacote moderno do OneDrive.');
+    throw new Error(commandFailureMessage(result, 'Não foi possível remover o pacote moderno do OneDrive.'));
   }
 }
 
@@ -320,7 +365,7 @@ if (Test-Path -LiteralPath $path) {
 `;
   const result = await runPowerShellScript(script, { timeoutMs: 30000 });
   if (result.exitCode !== 0) {
-    throw new Error(result.stderr || result.stdout || 'Não foi possível remover os arquivos de aplicativo do OneDrive.');
+    throw new Error(commandFailureMessage(result, 'Não foi possível remover os arquivos de aplicativo do OneDrive.'));
   }
 }
 
@@ -356,7 +401,7 @@ Remove-Item -LiteralPath $resolved.Path -Recurse -Force
 `;
   const result = await runPowerShellScript(script, { timeoutMs: 60000 });
   if (result.exitCode !== 0) {
-    throw new Error(result.stderr || result.stdout || 'Não foi possível remover a pasta residual do OneDrive.');
+    throw new Error(commandFailureMessage(result, 'Não foi possível remover a pasta residual do OneDrive.'));
   }
 }
 
@@ -437,7 +482,7 @@ $previous
 `;
   const result = await runPowerShellScript(script, { timeoutMs: 15000 });
   if (result.exitCode !== 0) {
-    throw new Error(result.stderr || result.stdout || 'Não foi possível definir PowerShell 7 como padrão.');
+    throw new Error(commandFailureMessage(result, 'Não foi possível definir PowerShell 7 como padrão.'));
   }
   return result.stdout.trim() || null;
 }
@@ -456,7 +501,7 @@ $settings | ConvertTo-Json -Depth 100 | Set-Content $path -Encoding UTF8
 `;
   const result = await runPowerShellScript(script, { timeoutMs: 15000 });
   if (result.exitCode !== 0) {
-    throw new Error(result.stderr || result.stdout || 'Não foi possível restaurar o shell padrão anterior.');
+    throw new Error(commandFailureMessage(result, 'Não foi possível restaurar o shell padrão anterior.'));
   }
 }
 
@@ -778,7 +823,10 @@ export async function applyOptimization(id: OptimizationId): Promise<Optimizatio
         response =
           activation.exitCode === 0
             ? result(true, 'Plano de energia de desempenho máximo ativado com sucesso.')
-            : result(false, 'Não foi possível ativar o plano de energia. Execute o ItoBoost como administrador.');
+            : result(
+                false,
+                commandFailureMessage(activation, 'Não foi possível ativar o plano de energia. Execute o ItoBoost como administrador.')
+              );
         break;
       }
       case 'taskbar-left':
@@ -821,7 +869,10 @@ export async function applyOptimization(id: OptimizationId): Promise<Optimizatio
             ? result(true, 'Proteção em tempo real do Defender desativada temporariamente.')
             : result(
                 false,
-                'O Windows bloqueou a alteração do Defender. O ItoBoost não tenta contornar proteções do sistema.'
+                commandFailureMessage(
+                  defender,
+                  'O Windows bloqueou a alteração do Defender. O ItoBoost não tenta contornar proteções do sistema.'
+                )
               );
         break;
       }
@@ -830,7 +881,7 @@ export async function applyOptimization(id: OptimizationId): Promise<Optimizatio
         response =
           dynamicTick.exitCode === 0
             ? result(true, 'Dynamic tick desativado. Reinicie o PC para concluir.', true, false)
-            : result(false, 'Não foi possível alterar o BCD. Execute o ItoBoost como administrador.');
+            : result(false, commandFailureMessage(dynamicTick, 'Não foi possível alterar o BCD. Execute o ItoBoost como administrador.'));
         break;
       }
       case 'disable-fast-startup':
@@ -848,7 +899,10 @@ export async function applyOptimization(id: OptimizationId): Promise<Optimizatio
         response =
           hibernate.exitCode === 0
             ? result(true, 'Hibernação desativada e hiberfil.sys removido pelo Windows.')
-            : result(false, 'Não foi possível desativar a hibernação. Execute o ItoBoost como administrador.');
+            : result(
+                false,
+                commandFailureMessage(hibernate, 'Não foi possível desativar a hibernação. Execute o ItoBoost como administrador.')
+              );
         break;
       }
       case 'disable-location-tracking':
@@ -895,7 +949,7 @@ export async function applyOptimization(id: OptimizationId): Promise<Optimizatio
         response =
           hpet.exitCode === 0
             ? result(true, 'HPET ativado. Reinicie o PC para concluir.', true, false)
-            : result(false, 'Não foi possível alterar o BCD. Execute o ItoBoost como administrador.');
+            : result(false, commandFailureMessage(hpet, 'Não foi possível alterar o BCD. Execute o ItoBoost como administrador.'));
         break;
       }
       case 'enable-windowed-game-optimizations':
@@ -916,7 +970,13 @@ export async function applyOptimization(id: OptimizationId): Promise<Optimizatio
         ]);
         response = netshResults.every((item) => item.exitCode === 0)
           ? result(true, 'Configurações de rede otimizadas para menor latência.')
-          : result(false, 'Parte das configurações de rede foi bloqueada pelo Windows ou pelo driver.');
+          : result(
+              false,
+              netshResults
+                .filter((item) => item.exitCode !== 0)
+                .map((item) => commandFailureMessage(item, 'Parte das configurações de rede foi bloqueada pelo Windows ou pelo driver.'))
+                .join(' ')
+            );
         break;
       }
       case 'optimize-nvidia-settings': {
@@ -935,7 +995,10 @@ export async function applyOptimization(id: OptimizationId): Promise<Optimizatio
         if (nvidia.exitCode !== 0) {
           response = result(
             false,
-            'O driver Nvidia não permitiu aplicar o modo de persistência. Nenhuma alteração agressiva foi tentada.'
+            commandFailureMessage(
+              nvidia,
+              'O driver Nvidia não permitiu aplicar o modo de persistência. Nenhuma alteração agressiva foi tentada.'
+            )
           );
           break;
         }
@@ -963,7 +1026,7 @@ foreach ($package in $packages) {
         response =
           removeGamingApps.exitCode === 0
             ? result(true, 'Apps de jogos pré-instalados foram removidos do usuário atual.')
-            : result(false, 'Não foi possível remover os apps de jogos encontrados.');
+            : result(false, commandFailureMessage(removeGamingApps, 'Não foi possível remover os apps de jogos encontrados.'));
         break;
       }
       case 'remove-onedrive': {
@@ -1010,7 +1073,7 @@ foreach ($package in $packages) {
         response =
           cleanup.exitCode === 0
             ? result(true, 'Limpeza de Disco executada com sucesso.')
-            : result(false, 'Não foi possível executar a Limpeza de Disco do Windows.');
+            : result(false, commandFailureMessage(cleanup, 'Não foi possível executar a Limpeza de Disco do Windows.'));
         break;
       }
       case 'set-powershell7-default': {
@@ -1048,7 +1111,7 @@ foreach ($name in $names) {
         response =
           serviceResult.exitCode === 0
             ? result(true, 'Serviços opcionais definidos como inicialização manual.')
-            : result(false, 'Não foi possível ajustar os serviços opcionais.');
+            : result(false, commandFailureMessage(serviceResult, 'Não foi possível ajustar os serviços opcionais.'));
         break;
       }
       case 'set-time-utc':
@@ -1098,7 +1161,7 @@ export async function revertOptimization(id: OptimizationId): Promise<Optimizati
         response =
           rollback.exitCode === 0
             ? result(true, 'Plano de energia anterior restaurado com sucesso.')
-            : result(false, 'Não foi possível restaurar o plano de energia anterior.');
+            : result(false, commandFailureMessage(rollback, 'Não foi possível restaurar o plano de energia anterior.'));
         break;
       }
       case 'taskbar-left':
@@ -1132,7 +1195,7 @@ export async function revertOptimization(id: OptimizationId): Promise<Optimizati
         response =
           defender.exitCode === 0
             ? result(true, 'Proteção em tempo real do Defender reativada.')
-            : result(false, 'O Windows bloqueou a alteração do Defender.');
+            : result(false, commandFailureMessage(defender, 'O Windows bloqueou a alteração do Defender.'));
         break;
       }
       case 'disable-dynamic-tick': {
@@ -1158,7 +1221,10 @@ export async function revertOptimization(id: OptimizationId): Promise<Optimizati
         response =
           hibernate.exitCode === 0
             ? result(true, 'Hibernação reativada.')
-            : result(false, 'Não foi possível reativar a hibernação. Execute o ItoBoost como administrador.');
+            : result(
+                false,
+                commandFailureMessage(hibernate, 'Não foi possível reativar a hibernação. Execute o ItoBoost como administrador.')
+              );
         break;
       }
       case 'disable-location-tracking':
@@ -1205,7 +1271,7 @@ export async function revertOptimization(id: OptimizationId): Promise<Optimizati
         response =
           hpet.exitCode === 0
             ? result(true, 'HPET voltou ao comportamento automático do Windows. Reinicie o PC para concluir.', true, false)
-            : result(true, 'HPET já não estava forçado no BCD.', true, false);
+            : result(true, commandFailureMessage(hpet, 'HPET já não estava forçado no BCD.'), true, false);
         break;
       }
       case 'enable-windowed-game-optimizations':
@@ -1226,7 +1292,13 @@ export async function revertOptimization(id: OptimizationId): Promise<Optimizati
           ]);
           response = netshResults.every((item) => item.exitCode === 0)
             ? result(true, 'Configurações de rede restauradas para valores conservadores do Windows.')
-            : result(false, 'Parte das configurações de rede não pôde ser restaurada pelo netsh.');
+            : result(
+                false,
+                netshResults
+                  .filter((item) => item.exitCode !== 0)
+                  .map((item) => commandFailureMessage(item, 'Parte das configurações de rede não pôde ser restaurada pelo netsh.'))
+                  .join(' ')
+              );
         }
         break;
       case 'optimize-nvidia-settings': {
@@ -1296,7 +1368,7 @@ foreach ($property in $modes.PSObject.Properties) {
         response =
           serviceResult.exitCode === 0
             ? result(true, 'Serviços opcionais restaurados para os modos anteriores salvos.')
-            : result(false, 'Não foi possível restaurar os serviços opcionais.');
+            : result(false, commandFailureMessage(serviceResult, 'Não foi possível restaurar os serviços opcionais.'));
         break;
       }
       case 'set-time-utc':

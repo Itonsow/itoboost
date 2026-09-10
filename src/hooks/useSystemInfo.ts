@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getSystemInfo } from '../services/systemService';
+import { isOperationRunning } from '../services/operationState';
 import type { SystemInfo } from '../types/system';
 
 interface UseSystemInfoResult {
@@ -9,42 +10,100 @@ interface UseSystemInfoResult {
   refetch: () => Promise<void>;
 }
 
+interface SystemInfoRequest {
+  id: number;
+  promise: Promise<SystemInfo>;
+}
+
 let systemInfoCache: SystemInfo | null = null;
+let nextSystemInfoRequestId = 0;
+let latestSystemInfoRequestId = 0;
+let systemInfoInFlight: SystemInfoRequest | null = null;
+
+function getSystemInfoRequest(force: boolean): SystemInfoRequest {
+  if (systemInfoInFlight && !force) return systemInfoInFlight;
+
+  const request: SystemInfoRequest = {
+    id: ++nextSystemInfoRequestId,
+    promise: getSystemInfo()
+  };
+  latestSystemInfoRequestId = request.id;
+  systemInfoInFlight = request;
+  void request.promise.then(
+    () => {
+      if (systemInfoInFlight === request) systemInfoInFlight = null;
+    },
+    () => {
+      if (systemInfoInFlight === request) systemInfoInFlight = null;
+    }
+  );
+  return request;
+}
 
 export function useSystemInfo(): UseSystemInfoResult {
   const [data, setData] = useState<SystemInfo | null>(() => systemInfoCache);
   const [isLoading, setIsLoading] = useState(() => !systemInfoCache);
   const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(false);
+  const viewGenerationRef = useRef(0);
 
-  const fetchSystemInfo = useCallback(async () => {
+  const loadSystemInfo = useCallback(async (force: boolean) => {
+    if (!mountedRef.current || isOperationRunning()) return;
+
+    const request = getSystemInfoRequest(force);
+    const generation = ++viewGenerationRef.current;
     setIsLoading(true);
     setError(null);
 
     try {
-      const info = await getSystemInfo();
+      const info = await request.promise;
+      if (
+        !mountedRef.current ||
+        generation !== viewGenerationRef.current ||
+        request.id !== latestSystemInfoRequestId
+      ) {
+        return;
+      }
+
       systemInfoCache = info;
       setData(info);
     } catch (unknownError) {
-      const message =
+      if (
+        !mountedRef.current ||
+        generation !== viewGenerationRef.current ||
+        request.id !== latestSystemInfoRequestId
+      ) {
+        return;
+      }
+
+      setError(
         unknownError instanceof Error
           ? unknownError.message
-          : 'Não foi possível carregar as informações do sistema.';
-      setError(message);
+          : 'Não foi possível carregar as informações do sistema.'
+      );
     } finally {
-      setIsLoading(false);
+      if (mountedRef.current && generation === viewGenerationRef.current) {
+        setIsLoading(false);
+      }
     }
   }, []);
 
+  const refetch = useCallback(() => loadSystemInfo(true), [loadSystemInfo]);
+
   useEffect(() => {
-    if (!systemInfoCache) {
-      void fetchSystemInfo();
-    }
-  }, [fetchSystemInfo]);
+    mountedRef.current = true;
+    if (!systemInfoCache) void loadSystemInfo(false);
+
+    return () => {
+      mountedRef.current = false;
+      viewGenerationRef.current += 1;
+    };
+  }, [loadSystemInfo]);
 
   return {
     data,
     isLoading,
     error,
-    refetch: fetchSystemInfo
+    refetch
   };
 }

@@ -3,10 +3,11 @@ import { navigationItems, type PageKey } from '../../constants/navigation';
 
 interface SidebarProps {
   activePage: PageKey;
+  isNavigationBlocked: boolean;
   onNavigate: (page: PageKey) => void;
 }
 
-export function Sidebar({ activePage, onNavigate }: SidebarProps) {
+export function Sidebar({ activePage, isNavigationBlocked, onNavigate }: SidebarProps) {
   return (
     <aside className="flex h-screen w-[280px] shrink-0 flex-col border-r border-white/[0.07] bg-booster-void/80 px-5 py-6 backdrop-blur-2xl">
       <div className="mb-8 flex items-center gap-3 px-2">
@@ -26,11 +27,13 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
 
           return (
             <button
+              aria-disabled={isNavigationBlocked}
               className={`group relative flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-semibold transition duration-200 ${
                 isActive
                   ? 'border border-cyan-300/25 bg-blue-500/15 text-white shadow-glow'
                   : 'border border-transparent text-slate-400 hover:border-white/[0.08] hover:bg-white/[0.045] hover:text-slate-100'
               }`}
+              disabled={isNavigationBlocked}
               key={item.id}
               onClick={() => onNavigate(item.id)}
               type="button"
@@ -58,14 +61,13 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
       <div className="mt-auto rounded-3xl border border-white/[0.07] bg-white/[0.04] p-4">
         <div className="mb-4 flex items-center gap-2 text-slate-400">
           {[Github, Twitch, MessageCircle].map((Icon, index) => (
-            <button
-              aria-label="Social decorativo"
-              className="grid h-9 w-9 place-items-center rounded-xl border border-white/[0.07] bg-white/[0.04] transition hover:border-cyan-300/25 hover:text-cyan-100"
+            <span
+              aria-hidden="true"
+              className="grid h-9 w-9 place-items-center rounded-xl border border-white/[0.07] bg-white/[0.04]"
               key={index}
-              type="button"
             >
               <Icon size={16} />
-            </button>
+            </span>
           ))}
         </div>
         <div className="flex items-center justify-between border-t border-white/[0.07] pt-4">

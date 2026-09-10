@@ -18,9 +18,7 @@ import {
   Wrench
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { ActionProgressPopup } from '../components/ui/ActionProgressPopup';
 import { Card } from '../components/ui/Card';
-import { useActionProgress } from '../hooks/useActionProgress';
 import { useInstallableApps } from '../hooks/useInstallableApps';
 import type { AppCategory, AppInstallId, AppInstallItem } from '../types/apps';
 
@@ -57,11 +55,13 @@ function getActionLabel(app: AppInstallItem): string {
 function AppInstallCard({
   app,
   isRunning,
+  isBusy,
   message,
   onInstall
 }: {
   app: AppInstallItem;
   isRunning: boolean;
+  isBusy: boolean;
   message?: { success: boolean; message: string };
   onInstall: (id: AppInstallId) => void;
 }) {
@@ -126,7 +126,7 @@ function AppInstallCard({
 
         <button
           className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-cyan-300/25 bg-cyan-400/15 px-4 text-sm font-bold text-cyan-50 shadow-glow transition hover:bg-cyan-400/25 disabled:cursor-not-allowed disabled:opacity-55"
-          disabled={isRunning || !canInstall}
+          disabled={isRunning || isBusy || !canInstall}
           onClick={() => onInstall(app.id)}
           type="button"
         >
@@ -147,8 +147,6 @@ function AppInstallCard({
 export function Apps() {
   const { apps, wingetAvailable, isLoading, runningId, error, messages, counts, refresh, runInstall } =
     useInstallableApps();
-  const runningApp = runningId ? apps.find((app) => app.id === runningId) : null;
-  const actionProgress = useActionProgress(Boolean(runningId));
 
   return (
     <div className="mx-auto max-w-[1560px] space-y-7">
@@ -193,7 +191,7 @@ export function Apps() {
         </Card>
       </section>
 
-      {!wingetAvailable && (
+      {!isLoading && !error && !wingetAvailable && (
         <div className="rounded-3xl border border-orange-300/20 bg-orange-400/10 px-5 py-4 text-sm text-orange-100">
           O winget nao foi encontrado. Apps com instalacao automatica precisam do Gerenciador de Pacotes do Windows.
         </div>
@@ -219,6 +217,7 @@ export function Apps() {
           {apps.map((app) => (
             <AppInstallCard
               app={app}
+              isBusy={Boolean(runningId)}
               isRunning={runningId === app.id}
               key={app.id}
               message={messages[app.id]}
@@ -228,18 +227,6 @@ export function Apps() {
         </section>
       )}
 
-      <ActionProgressPopup
-        description={
-          actionProgress.isComplete
-            ? 'Ação concluída.'
-            : runningApp
-            ? `${runningApp.installKind === 'external' ? 'Abrindo download oficial' : 'Instalando via winget'}: ${runningApp.name}`
-            : 'Executando ação selecionada.'
-        }
-        isVisible={actionProgress.isVisible}
-        progress={actionProgress.progress}
-        title="Ação de app em andamento"
-      />
     </div>
   );
 }

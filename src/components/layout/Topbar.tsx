@@ -19,13 +19,10 @@ export function Topbar() {
       </div>
 
       <div className="flex items-center gap-3">
-        <button
-          className="no-drag flex h-9 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.045] px-3 text-xs font-semibold text-slate-300 transition hover:border-cyan-300/30 hover:bg-cyan-400/10 hover:text-cyan-100"
-          type="button"
-        >
+        <div className="no-drag flex h-9 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.045] px-3 text-xs font-semibold text-slate-300">
           <Globe2 size={15} />
           PT-BR
-        </button>
+        </div>
 
         <div className="no-drag h-6 w-px bg-white/[0.08]" />
 

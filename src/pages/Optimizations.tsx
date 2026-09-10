@@ -5,9 +5,7 @@ import { OptimizationConfirmModal } from '../components/optimizations/Optimizati
 import { OptimizationFilters } from '../components/optimizations/OptimizationFilters';
 import { OptimizationGrid } from '../components/optimizations/OptimizationGrid';
 import { OptimizationSearch } from '../components/optimizations/OptimizationSearch';
-import { ActionProgressPopup } from '../components/ui/ActionProgressPopup';
 import { Card } from '../components/ui/Card';
-import { useActionProgress } from '../hooks/useActionProgress';
 import { useOptimizations } from '../hooks/useOptimizations';
 import type { OptimizationViewModel } from '../types/optimization';
 
@@ -20,7 +18,6 @@ export function Optimizations() {
   const {
     categories,
     optimizations,
-    allOptimizations,
     counts,
     isLoading,
     isAdmin,
@@ -37,11 +34,6 @@ export function Optimizations() {
     refresh
   } = useOptimizations();
   const [confirmation, setConfirmation] = useState<ConfirmationState | null>(null);
-  const runningOptimization = runningId
-    ? allOptimizations.find((optimization) => optimization.id === runningId)
-    : null;
-  const runningAction = runningId ? pendingActions[runningId] : undefined;
-  const actionProgress = useActionProgress(Boolean(runningId));
 
   const handleRun = (optimization: OptimizationViewModel, action: 'apply' | 'revert') => {
     const needsConfirmation =
@@ -78,7 +70,7 @@ export function Optimizations() {
           <OptimizationSearch onChange={setQuery} value={query} />
           <button
             className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl border border-white/[0.08] bg-white/[0.045] px-4 text-sm font-semibold text-slate-200 transition hover:border-cyan-300/25 hover:bg-cyan-400/10 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={isLoading}
+            disabled={isLoading || runningId !== null}
             onClick={() => void refresh()}
             type="button"
           >
@@ -143,6 +135,7 @@ export function Optimizations() {
         </section>
       ) : (
         <OptimizationGrid
+          isBusy={runningId !== null}
           isAdmin={isAdmin}
           messages={messages}
           onPendingChange={setPendingAction}
@@ -168,18 +161,6 @@ export function Optimizations() {
         />
       )}
 
-      <ActionProgressPopup
-        description={
-          actionProgress.isComplete
-            ? 'Ajuste concluído.'
-            : runningOptimization
-            ? `${runningAction === 'revert' ? 'Revertendo' : 'Aplicando'}: ${runningOptimization.title}`
-            : 'Executando ajuste selecionado.'
-        }
-        isVisible={actionProgress.isVisible}
-        progress={actionProgress.progress}
-        title="Otimização em andamento"
-      />
     </div>
   );
 }
